@@ -155,7 +155,10 @@ function CompanyFiles() {
       setPendingFileData(null)
       setUploading(true)
       try {
-        const path = `${Date.now()}_${theData.name}`
+        /* Supabase Storage 不支持中文路径，只用时间戳+扩展名 */
+        const ext = theData.name.split('.').pop() || 'bin'
+        const safeName = `${Date.now()}.${ext}`
+        const path = safeName
         console.log('[CompanyFiles] 开始上传:', theData.name, '大小:', theData.size, '类型:', theData.type, 'buffer长度:', theData.buffer.byteLength)
 
         const uploadResult = await uploadBufferToStorage('company-files', path, theData.buffer, theData.type)
