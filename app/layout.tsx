@@ -2,8 +2,8 @@ import type { Metadata } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'My Blog',
-  description: 'A modern blog powered by Next.js & Supabase',
+  title: '莱源公司',
+  description: '莱源公司官方博客',
 }
 
 export default function RootLayout({
@@ -13,7 +13,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="zh-CN">
-      <body className="bg-gray-50 text-gray-900 min-h-screen">
+      <body className="min-h-full flex flex-col bg-[#0a0a0a] text-white font-sans antialiased">
         {children}
       </body>
     </html>
