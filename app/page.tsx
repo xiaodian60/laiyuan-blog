@@ -67,10 +67,11 @@ async function uploadImage(file: File): Promise<string | null> {
    ═══════════════════════════════════════════════════════ */
 function CompanyFiles({ supabase }: { supabase: any }) {
   const [files, setFiles] = useState<CompanyFile[]>([])
-  const [pwdInput, setPwdInput] = useState('')
-  const [showPwdModal, setShowPwdModal] = useState(false)
-  const [pendingAction, setPendingAction] = useState<(() => void) | null>(null)
   const [uploading, setUploading] = useState(false)
+  const [showPwdModal, setShowPwdModal] = useState(false)
+  const [pwdInput, setPwdInput] = useState('')
+  const [pendingFile, setPendingFile] = useState<File | null>(null)
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const fetchFiles = useCallback(async () => {
@@ -80,32 +81,36 @@ function CompanyFiles({ supabase }: { supabase: any }) {
 
   useEffect(() => { fetchFiles() }, [fetchFiles])
 
-  const requirePwd = (action: () => void) => {
-    setPendingAction(() => action)
-    setShowPwdModal(true)
-  }
-
-  const confirmPwd = () => {
-    if (pwdInput === '114514' && pendingAction) {
-      pendingAction()
-      setShowPwdModal(false)
-      setPwdInput('')
-      setPendingAction(null)
-    } else {
-      alert('密码错误！')
-      setPwdInput('')
-    }
-  }
-
-  const uploadFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  /* ── 上传文件：先选文件，再弹密码框 ── */
+  const onFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    const theFile = file
-    requirePwd(async () => {
+    setPendingFile(file)
+    setShowPwdModal(true)
+    e.target.value = ''
+  }
+
+  /* ── 密码确认后执行操作 ── */
+  const confirmPwd = async () => {
+    if (pwdInput !== '114514') {
+      alert('密码错误！')
+      setPwdInput('')
+      return
+    }
+
+    setShowPwdModal(false)
+    setPwdInput('')
+
+    // 上传文件
+    if (pendingFile) {
+      const theFile = pendingFile
+      setPendingFile(null)
       setUploading(true)
       try {
         const path = `${Date.now()}_${theFile.name}`
-        const { error: uploadErr } = await supabase.storage
+        console.log('[CompanyFiles] 开始上传:', theFile.name, '大小:', theFile.size, '类型:', theFile.type)
+
+        const { data: upData, error: uploadErr } = await supabase.storage
           .from('company-files')
           .upload(path, theFile, {
             contentType: theFile.type || 'application/octet-stream',
@@ -113,13 +118,14 @@ function CompanyFiles({ supabase }: { supabase: any }) {
           })
 
         if (uploadErr) {
-          console.error('文件上传失败:', uploadErr.message)
+          console.error('[CompanyFiles] 上传失败:', uploadErr.message)
           alert('文件上传失败：' + uploadErr.message)
           setUploading(false)
           return
         }
 
-        // 插入 files 表记录（列名：name, file_path, file_size, file_type）
+        console.log('[CompanyFiles] 上传成功, path:', upData.path)
+
         const { error: dbErr } = await supabase.from('files').insert({
           name: theFile.name,
           file_path: path,
@@ -128,30 +134,43 @@ function CompanyFiles({ supabase }: { supabase: any }) {
         })
 
         if (dbErr) {
-          console.error('文件记录保存失败:', dbErr.message)
+          console.error('[CompanyFiles] 记录保存失败:', dbErr.message)
           alert('文件已上传但记录保存失败：' + dbErr.message)
+        } else {
+          console.log('[CompanyFiles] 记录保存成功')
         }
 
         fetchFiles()
       } catch (err) {
-        console.error('文件上传异常:', err)
+        console.error('[CompanyFiles] 上传异常:', err)
         alert('文件上传失败，请检查网络连接')
       }
       setUploading(false)
-    })
-    e.target.value = ''
+      return
+    }
+
+    // 删除文件
+    if (pendingDeleteId) {
+      const fileId = pendingDeleteId
+      const file = files.find(f => f.id === fileId)
+      setPendingDeleteId(null)
+      try {
+        if (file?.file_path) {
+          await supabase.storage.from('company-files').remove([file.file_path])
+        }
+        await supabase.from('files').delete().eq('id', fileId)
+        fetchFiles()
+      } catch (err) {
+        console.error('[CompanyFiles] 删除失败:', err)
+        alert('删除文件失败')
+      }
+    }
   }
 
-  const deleteFile = (file: CompanyFile) => {
-    requirePwd(async () => {
-      // 先删除存储中的文件
-      if (file.file_path) {
-        await supabase.storage.from('company-files').remove([file.file_path])
-      }
-      // 再删除数据库记录
-      await supabase.from('files').delete().eq('id', file.id)
-      fetchFiles()
-    })
+  /* ── 点击删除 ── */
+  const onDeleteClick = (file: CompanyFile) => {
+    setPendingDeleteId(file.id)
+    setShowPwdModal(true)
   }
 
   const formatSize = (bytes: number) =>
@@ -168,7 +187,7 @@ function CompanyFiles({ supabase }: { supabase: any }) {
         >
           {uploading ? '上传中...' : '上传'}
         </button>
-        <input ref={fileInputRef} type="file" className="hidden" onChange={uploadFile} />
+        <input ref={fileInputRef} type="file" className="hidden" onChange={onFileSelected} />
       </div>
 
       {files.length === 0 ? (
@@ -187,7 +206,7 @@ function CompanyFiles({ supabase }: { supabase: any }) {
                   const { data: urlData } = supabase.storage.from('company-files').getPublicUrl(file.file_path)
                   window.open(urlData.publicUrl, '_blank')
                 }} className="text-xs text-purple-400 hover:underline min-h-[32px] flex items-center">⬇️</button>
-                <button onClick={() => deleteFile(file)} className="text-xs text-red-400 hover:underline min-h-[32px] flex items-center">🗑️</button>
+                <button onClick={() => onDeleteClick(file)} className="text-xs text-red-400 hover:underline min-h-[32px] flex items-center">🗑️</button>
               </div>
             </div>
           ))}
@@ -196,10 +215,10 @@ function CompanyFiles({ supabase }: { supabase: any }) {
 
       {/* 密码弹窗 */}
       {showPwdModal && (
-        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={(e) => { if (e.target === e.currentTarget) { setShowPwdModal(false); setPwdInput('') } }}>
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={(e) => { if (e.target === e.currentTarget) { setShowPwdModal(false); setPwdInput(''); setPendingFile(null); setPendingDeleteId(null) } }}>
           <div className="bg-[#1a1a2e] rounded-2xl w-full max-w-sm p-6 space-y-4 border border-white/10">
             <h3 className="text-lg font-bold text-white">🔐 密码验证</h3>
-            <p className="text-sm text-white/50">此操作需要密码验证</p>
+            <p className="text-sm text-white/50">{pendingFile ? `上传文件：${pendingFile.name}` : pendingDeleteId ? '删除文件' : '此操作需要密码验证'}</p>
             <input
               type="password"
               value={pwdInput}
@@ -210,7 +229,7 @@ function CompanyFiles({ supabase }: { supabase: any }) {
               autoFocus
             />
             <div className="flex gap-3">
-              <button onClick={() => { setShowPwdModal(false); setPwdInput('') }} className="flex-1 py-3 border border-white/10 rounded-lg hover:bg-white/5 transition-colors text-sm text-white/70 min-h-[44px]">取消</button>
+              <button onClick={() => { setShowPwdModal(false); setPwdInput(''); setPendingFile(null); setPendingDeleteId(null) }} className="flex-1 py-3 border border-white/10 rounded-lg hover:bg-white/5 transition-colors text-sm text-white/70 min-h-[44px]">取消</button>
               <button onClick={confirmPwd} className="flex-1 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-sm min-h-[44px]">确认</button>
             </div>
           </div>
