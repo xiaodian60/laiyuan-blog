@@ -35,40 +35,65 @@ interface NeteaseSong {
   artists: { name: string }[]
 }
 
-/* ── 直接用 REST API 上传文件到 Storage（绕过 SDK 可能的问题）── */
-async function uploadToStorage(bucket: string, path: string, file: File | Blob): Promise<string | null> {
+/* ── 存储上传数据（ArrayBuffer，避免 File 引用丢失）── */
+interface PendingUploadData {
+  buffer: ArrayBuffer
+  name: string
+  type: string
+  size: number
+}
+
+/* ── 直接用 REST API 上传到 Storage ── */
+async function uploadBufferToStorage(
+  bucket: string,
+  path: string,
+  buffer: ArrayBuffer,
+  contentType: string,
+): Promise<string | null> {
   try {
+    console.log(`[uploadBufferToStorage] 开始: bucket=${bucket}, path=${path}, size=${buffer.byteLength}, type=${contentType}`)
+
     const res = await fetch(`${SUPABASE_URL}/storage/v1/object/${bucket}/${path}`, {
       method: 'POST',
       headers: {
         'apikey': SUPABASE_ANON_KEY,
         'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-        'Content-Type': file.type || 'application/octet-stream',
+        'Content-Type': contentType || 'application/octet-stream',
         'x-upsert': 'true',
       },
-      body: file,
+      body: buffer,
     })
 
     if (!res.ok) {
       const errText = await res.text()
-      console.error(`[Storage] 上传失败 (${res.status}):`, errText)
+      console.error(`[uploadBufferToStorage] 失败 (${res.status}):`, errText)
       return null
     }
 
     const data = await res.json()
-    console.log('[Storage] 上传成功, key:', data.Key)
+    console.log('[uploadBufferToStorage] 成功, key:', data.Key)
     return data.Key
   } catch (err) {
-    console.error('[Storage] 上传异常:', err)
+    console.error('[uploadBufferToStorage] 异常:', err)
     return null
   }
 }
 
+/* ── 读取 File 为 ArrayBuffer ── */
+function readFileAsBuffer(file: File): Promise<ArrayBuffer> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as ArrayBuffer)
+    reader.onerror = () => reject(reader.error)
+    reader.readAsArrayBuffer(file)
+  })
+}
+
 /* ── 图片上传 ── */
-async function uploadImage(file: File): Promise<string | null> {
-  const ext = file.name.split('.').pop() || 'png'
+async function uploadImage(data: PendingUploadData): Promise<string | null> {
+  const ext = data.name.split('.').pop() || 'png'
   const path = `${Date.now()}.${ext}`
-  const result = await uploadToStorage('post-images', path, file)
+  const result = await uploadBufferToStorage('post-images', path, data.buffer, data.type)
   if (!result) return null
   return `${SUPABASE_URL}/storage/v1/object/public/post-images/${path}`
 }
@@ -81,7 +106,7 @@ function CompanyFiles() {
   const [uploading, setUploading] = useState(false)
   const [showPwdModal, setShowPwdModal] = useState(false)
   const [pwdInput, setPwdInput] = useState('')
-  const [pendingFile, setPendingFile] = useState<File | null>(null)
+  const [pendingFileData, setPendingFileData] = useState<PendingUploadData | null>(null)
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -98,12 +123,18 @@ function CompanyFiles() {
 
   useEffect(() => { fetchFiles() }, [fetchFiles])
 
-  /* ── 上传文件：先选文件，再弹密码框 ── */
-  const onFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+  /* ── 上传文件：选文件后立即读取为 ArrayBuffer，再弹密码框 ── */
+  const onFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    setPendingFile(file)
-    setShowPwdModal(true)
+    try {
+      const buffer = await readFileAsBuffer(file)
+      setPendingFileData({ buffer, name: file.name, type: file.type || 'application/octet-stream', size: file.size })
+      setShowPwdModal(true)
+    } catch (err) {
+      console.error('[CompanyFiles] 读取文件失败:', err)
+      alert('读取文件失败，请重试')
+    }
     e.target.value = ''
   }
 
@@ -118,26 +149,26 @@ function CompanyFiles() {
     setShowPwdModal(false)
     setPwdInput('')
 
-    // 上传文件（直接 REST API）
-    if (pendingFile) {
-      const theFile = pendingFile
-      setPendingFile(null)
+    // 上传文件（ArrayBuffer 方式）
+    if (pendingFileData) {
+      const theData = pendingFileData
+      setPendingFileData(null)
       setUploading(true)
       try {
-        const path = `${Date.now()}_${theFile.name}`
-        console.log('[CompanyFiles] 开始上传:', theFile.name, '大小:', theFile.size, '类型:', theFile.type)
+        const path = `${Date.now()}_${theData.name}`
+        console.log('[CompanyFiles] 开始上传:', theData.name, '大小:', theData.size, '类型:', theData.type, 'buffer长度:', theData.buffer.byteLength)
 
-        const uploadResult = await uploadToStorage('company-files', path, theFile)
+        const uploadResult = await uploadBufferToStorage('company-files', path, theData.buffer, theData.type)
 
         if (!uploadResult) {
-          alert('文件上传到存储失败，请检查网络连接或联系管理员')
+          alert('文件上传到存储失败，请打开浏览器开发者工具(F12)查看控制台中的错误详情')
           setUploading(false)
           return
         }
 
         console.log('[CompanyFiles] 存储上传成功, path:', path)
 
-        // 写入数据库记录（也用 REST API）
+        // 写入数据库记录
         const dbRes = await fetch(`${SUPABASE_URL}/rest/v1/files`, {
           method: 'POST',
           headers: {
@@ -147,10 +178,10 @@ function CompanyFiles() {
             'Prefer': 'return=representation',
           },
           body: JSON.stringify({
-            name: theFile.name,
+            name: theData.name,
             file_path: path,
-            file_size: theFile.size,
-            file_type: theFile.type || 'application/octet-stream',
+            file_size: theData.size,
+            file_type: theData.type,
           }),
         })
 
@@ -165,7 +196,7 @@ function CompanyFiles() {
         fetchFiles()
       } catch (err) {
         console.error('[CompanyFiles] 上传异常:', err)
-        alert('文件上传失败，请检查网络连接')
+        alert('文件上传异常，请打开浏览器开发者工具(F12)查看控制台错误')
       }
       setUploading(false)
       return
@@ -249,10 +280,10 @@ function CompanyFiles() {
 
       {/* 密码弹窗 */}
       {showPwdModal && (
-        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={(e) => { if (e.target === e.currentTarget) { setShowPwdModal(false); setPwdInput(''); setPendingFile(null); setPendingDeleteId(null) } }}>
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={(e) => { if (e.target === e.currentTarget) { setShowPwdModal(false); setPwdInput(''); setPendingFileData(null); setPendingDeleteId(null) } }}>
           <div className="bg-[#1a1a2e] rounded-2xl w-full max-w-sm p-6 space-y-4 border border-white/10">
             <h3 className="text-lg font-bold text-white">🔐 密码验证</h3>
-            <p className="text-sm text-white/50">{pendingFile ? `上传文件：${pendingFile.name}` : pendingDeleteId ? '删除文件' : '此操作需要密码验证'}</p>
+            <p className="text-sm text-white/50">{pendingFileData ? `上传文件：${pendingFileData.name}` : pendingDeleteId ? '删除文件' : '此操作需要密码验证'}</p>
             <input
               type="password"
               value={pwdInput}
@@ -263,7 +294,7 @@ function CompanyFiles() {
               autoFocus
             />
             <div className="flex gap-3">
-              <button onClick={() => { setShowPwdModal(false); setPwdInput(''); setPendingFile(null); setPendingDeleteId(null) }} className="flex-1 py-3 border border-white/10 rounded-lg hover:bg-white/5 transition-colors text-sm text-white/70 min-h-[44px]">取消</button>
+              <button onClick={() => { setShowPwdModal(false); setPwdInput(''); setPendingFileData(null); setPendingDeleteId(null) }} className="flex-1 py-3 border border-white/10 rounded-lg hover:bg-white/5 transition-colors text-sm text-white/70 min-h-[44px]">取消</button>
               <button onClick={confirmPwd} className="flex-1 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-sm min-h-[44px]">确认</button>
             </div>
           </div>
@@ -288,7 +319,7 @@ export default function HomePage() {
   const [pubTitle, setPubTitle] = useState('')
   const [pubContent, setPubContent] = useState('')
   const [pubTags, setPubTags] = useState('')
-  const [pubImage, setPubImage] = useState<File | null>(null)
+  const [pubImageData, setPubImageData] = useState<PendingUploadData | null>(null)
   const [pubImagePreview, setPubImagePreview] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
 
@@ -372,10 +403,10 @@ export default function HomePage() {
     setUploading(true)
 
     let imageUrl: string | null = null
-    if (pubImage) {
-      imageUrl = await uploadImage(pubImage)
+    if (pubImageData) {
+      imageUrl = await uploadImage(pubImageData)
       if (imageUrl === null) {
-        alert('上传图片失败！请先在 Supabase SQL Editor 中执行 supabase-schema.sql 创建存储桶。\n\n详细步骤：\n1. 打开 Supabase Dashboard → SQL Editor\n2. 复制粘贴 supabase-schema.sql 的全部内容\n3. 点击 Run 执行')
+        alert('上传图片失败！请打开浏览器开发者工具(F12)查看控制台中的详细错误信息')
         setUploading(false)
         return
       }
@@ -402,19 +433,25 @@ export default function HomePage() {
     setPubTitle('')
     setPubContent('')
     setPubTags('')
-    setPubImage(null)
+    setPubImageData(null)
     setPubImagePreview(null)
     setUploading(false)
     fetchPosts()
   }
 
-  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    setPubImage(file)
-    const reader = new FileReader()
-    reader.onload = (ev) => setPubImagePreview(ev.target?.result as string)
-    reader.readAsDataURL(file)
+    try {
+      const buffer = await readFileAsBuffer(file)
+      setPubImageData({ buffer, name: file.name, type: file.type || 'image/png', size: file.size })
+      const reader = new FileReader()
+      reader.onload = (ev) => setPubImagePreview(ev.target?.result as string)
+      reader.readAsDataURL(file)
+    } catch (err) {
+      console.error('[handleImageSelect] 读取文件失败:', err)
+      alert('读取图片文件失败，请重试')
+    }
   }
 
   /* ── 音乐搜索（修复：加载状态、无结果提示、错误 alert）── */
