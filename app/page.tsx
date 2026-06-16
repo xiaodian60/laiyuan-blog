@@ -35,6 +35,22 @@ interface NeteaseSong {
   artists: { name: string }[]
 }
 
+/* ── 音乐 API 多镜像回退 ── */
+const MUSIC_APIS = [
+  'https://neteasecloudmusicapi-main-api.vercel.app',
+  'https://binaryify-netease-cloud-music-api.vercel.app',
+]
+
+async function fetchMusicApi(path: string): Promise<Response> {
+  for (const base of MUSIC_APIS) {
+    try {
+      const res = await fetch(`${base}${path}`, { signal: AbortSignal.timeout(8000) })
+      if (res.ok) return res
+    } catch { /* 跳过失败的镜像 */ }
+  }
+  throw new Error('所有音乐API均不可用，请检查网络连接')
+}
+
 /* ── 存储上传数据（ArrayBuffer，避免 File 引用丢失）── */
 interface PendingUploadData {
   buffer: ArrayBuffer
@@ -334,6 +350,8 @@ export default function HomePage() {
   const [searchError, setSearchError] = useState<string | null>(null)
   const [selectedMusicId, setSelectedMusicId] = useState<number | null>(null)
   const [selectedMusicName, setSelectedMusicName] = useState('')
+  const [musicUrl, setMusicUrl] = useState<string | null>(null)
+  const [musicLoading, setMusicLoading] = useState(false)
 
   const publishImageRef = useRef<HTMLInputElement>(null)
 
@@ -457,17 +475,14 @@ export default function HomePage() {
     }
   }
 
-  /* ── 音乐搜索（修复：加载状态、无结果提示、错误 alert）── */
+  /* ── 音乐搜索（多镜像回退）── */
   const searchMusic = async () => {
     if (!musicQuery.trim()) return
     setMusicSearching(true)
     setHasSearched(true)
     setSearchError(null)
     try {
-      const res = await fetch(
-        `https://binaryify-netease-cloud-music-api.vercel.app/search?keywords=${encodeURIComponent(musicQuery)}`
-      )
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const res = await fetchMusicApi(`/search?keywords=${encodeURIComponent(musicQuery)}&limit=30`)
       const data = await res.json()
       const songs: NeteaseSong[] = (data.result?.songs || []).map((s: any) => ({
         id: s.id,
@@ -480,14 +495,32 @@ export default function HomePage() {
       setMusicResults([])
       const msg = err instanceof Error ? err.message : '未知错误'
       setSearchError(msg)
-      alert('音乐搜索失败：' + msg + '，请检查网络连接后重试')
     }
     setMusicSearching(false)
   }
 
-  const selectSong = (song: NeteaseSong) => {
+  const selectSong = async (song: NeteaseSong) => {
+    const displayName = `${song.name} - ${song.artists.map((a) => a.name).join('/')}`
     setSelectedMusicId(song.id)
-    setSelectedMusicName(`${song.name} - ${song.artists.map((a) => a.name).join('/')}`)
+    setSelectedMusicName(displayName)
+    setMusicLoading(true)
+    setMusicUrl(null)
+    try {
+      const res = await fetchMusicApi(`/song/url?id=${song.id}`)
+      const data = await res.json()
+      const url = data.data?.[0]?.url
+      if (url) {
+        setMusicUrl(url)
+      } else {
+        setMusicLoading(false)
+        alert('该歌曲暂无可用音源，可能需要VIP或已下架，请换一首试试')
+        return
+      }
+    } catch (err) {
+      console.error('获取播放链接失败:', err)
+      alert('获取播放链接失败，请检查网络连接')
+    }
+    setMusicLoading(false)
   }
 
   /* ── 折叠切换 ─────────────────────────────────── */
@@ -614,34 +647,45 @@ export default function HomePage() {
                     {musicResults.map((song) => (
                       <div
                         key={song.id}
-                        onDoubleClick={() => selectSong(song)}
+                        onClick={() => selectSong(song)}
                         className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors select-none ${
                           selectedMusicId === song.id ? 'bg-purple-600/20 ring-1 ring-purple-500/30' : 'hover:bg-white/5'
                         }`}
-                        title="双击播放"
+                        title="点击播放"
                       >
-                        <span className="text-sm shrink-0">🎵</span>
+                        <span className="text-sm shrink-0">{selectedMusicId === song.id && musicUrl ? '🔊' : '🎵'}</span>
                         <div className="flex-1 min-w-0">
                           <p className="text-xs font-medium text-white/80 truncate">{song.name}</p>
                           <p className="text-xs text-white/30 truncate">{song.artists.map((a) => a.name).join('/')}</p>
                         </div>
                       </div>
                     ))}
-                    <p className="text-xs text-white/20 text-center pt-1">💡 双击歌名播放</p>
+                    <p className="text-xs text-white/20 text-center pt-1">💡 点击歌名播放</p>
                   </div>
                 )}
 
-                {/* 网易云外链播放器 */}
+                {/* 音频播放器 */}
                 {selectedMusicId && (
                   <div className="mt-3">
                     <p className="text-xs text-white/40 mb-2 truncate">🎶 {selectedMusicName}</p>
-                    <iframe
-                      key={selectedMusicId}
-                      src={`//music.163.com/outchain/player?type=2&id=${selectedMusicId}&auto=1&height=66`}
-                      className="w-full rounded-lg border-0"
-                      style={{ height: 86 }}
-                      allow="autoplay"
-                    />
+                    {musicLoading ? (
+                      <div className="flex items-center gap-2 py-3 px-4 bg-white/5 rounded-lg">
+                        <div className="w-4 h-4 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
+                        <span className="text-xs text-white/50">加载中...</span>
+                      </div>
+                    ) : musicUrl ? (
+                      <audio
+                        key={musicUrl}
+                        controls
+                        autoPlay
+                        className="w-full rounded-lg"
+                        style={{ height: 40 }}
+                      >
+                        <source src={musicUrl} type="audio/mpeg" />
+                      </audio>
+                    ) : (
+                      <p className="text-xs text-white/30 py-2">选择歌曲后点击播放</p>
+                    )}
                   </div>
                 )}
               </div>
@@ -667,7 +711,7 @@ export default function HomePage() {
                     >
                       {/* 头图 */}
                       {post.image_url && (
-                        <a href={`/posts/${post.id}`}>
+                        <a href={`/posts?id=${post.id}`}>
                           <img src={post.image_url} alt={post.title} className="w-full h-48 object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
                         </a>
                       )}
@@ -675,7 +719,7 @@ export default function HomePage() {
                       <div className="p-5">
                         {/* 标题 */}
                         <h3 className="text-lg font-bold text-white mb-2 leading-snug">
-                          <a href={`/posts/${post.id}`} className="hover:text-purple-400 transition-colors">{post.title}</a>
+                          <a href={`/posts?id=${post.id}`} className="hover:text-purple-400 transition-colors">{post.title}</a>
                         </h3>
 
                         {/* 置顶按钮 + 标签（同行） */}
@@ -726,7 +770,7 @@ export default function HomePage() {
                             >
                               {isLiked(post.id) ? '❤️' : '🤍'} {post.likes_count}
                             </button>
-                            <a href={`/posts/${post.id}`} className="text-sm text-white/30 hover:text-purple-400 transition-colors min-h-[32px] flex items-center">💬 评论</a>
+                            <a href={`/posts?id=${post.id}`} className="text-sm text-white/30 hover:text-purple-400 transition-colors min-h-[32px] flex items-center">💬 评论</a>
                           </div>
                           <button
                             onClick={() => deletePost(post.id)}
