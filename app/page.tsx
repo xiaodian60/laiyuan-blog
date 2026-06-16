@@ -25,8 +25,9 @@ interface Post {
 interface CompanyFile {
   id: string
   name: string
-  url: string
-  size: number
+  file_path: string
+  file_size: number
+  file_type: string
   created_at: string
 }
 
@@ -156,11 +157,12 @@ function CompanyFiles({ supabase }: { supabase: any }) {
 
         const { data } = supabase.storage.from('company-files').getPublicUrl(path)
 
-        // 插入 files 表记录
+        // 插入 files 表记录（列名：name, file_path, file_size, file_type）
         const { error: dbErr } = await supabase.from('files').insert({
           name: theFile.name,
-          url: data.publicUrl,
-          size: theFile.size,
+          file_path: path,
+          file_size: theFile.size,
+          file_type: theFile.type || 'application/octet-stream',
         })
 
         if (dbErr) {
@@ -180,6 +182,11 @@ function CompanyFiles({ supabase }: { supabase: any }) {
 
   const deleteFile = (file: CompanyFile) => {
     requirePwd(async () => {
+      // 先删除存储中的文件
+      if (file.file_path) {
+        await supabase.storage.from('company-files').remove([file.file_path])
+      }
+      // 再删除数据库记录
       await supabase.from('files').delete().eq('id', file.id)
       fetchFiles()
     })
@@ -211,10 +218,13 @@ function CompanyFiles({ supabase }: { supabase: any }) {
               <span className="text-sm shrink-0">📄</span>
               <div className="flex-1 min-w-0">
                 <p className="text-xs font-medium text-white/80 truncate">{file.name}</p>
-                <p className="text-xs text-white/30">{formatSize(file.size)}</p>
+                <p className="text-xs text-white/30">{formatSize(file.file_size)}</p>
               </div>
               <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                <button onClick={() => window.open(file.url, '_blank')} className="text-xs text-purple-400 hover:underline min-h-[32px] flex items-center">⬇️</button>
+                <button onClick={() => {
+                  const { data: urlData } = supabase.storage.from('company-files').getPublicUrl(file.file_path)
+                  window.open(urlData.publicUrl, '_blank')
+                }} className="text-xs text-purple-400 hover:underline min-h-[32px] flex items-center">⬇️</button>
                 <button onClick={() => deleteFile(file)} className="text-xs text-red-400 hover:underline min-h-[32px] flex items-center">🗑️</button>
               </div>
             </div>
