@@ -37,33 +37,9 @@ interface NeteaseSong {
   artists: { name: string }[]
 }
 
-/* ── 确保存储桶存在（如果桶不存在则尝试创建）── */
-async function ensureBucket(name: string): Promise<boolean> {
-  try {
-    const { data: buckets } = await supabase.storage.listBuckets()
-    if (buckets?.some((b: any) => b.id === name)) return true
-    // 桶不存在，尝试创建
-    const { error } = await supabase.storage.createBucket(name, { public: true })
-    if (error) {
-      console.warn(`存储桶 ${name} 不存在且无法自动创建:`, error.message)
-      return false
-    }
-    return true
-  } catch {
-    return false
-  }
-}
-
 /* ── 图片上传（失败时 console.error 并返回 null）── */
 async function uploadImage(file: File): Promise<string | null> {
   try {
-    // 确保桶存在
-    const bucketOk = await ensureBucket('post-images')
-    if (!bucketOk) {
-      console.error('图片上传失败: post-images 存储桶不存在，请先在 Supabase SQL Editor 中执行 supabase-schema.sql')
-      return null
-    }
-
     const ext = file.name.split('.').pop() || 'png'
     const path = `${Date.now()}.${ext}`
     const { error } = await supabase.storage
@@ -128,18 +104,6 @@ function CompanyFiles({ supabase }: { supabase: any }) {
     requirePwd(async () => {
       setUploading(true)
       try {
-        // 确保 company-files 桶存在
-        const { data: buckets } = await supabase.storage.listBuckets()
-        const bucketExists = buckets?.some((b: any) => b.id === 'company-files')
-        if (!bucketExists) {
-          const { error: createErr } = await supabase.storage.createBucket('company-files', { public: true })
-          if (createErr) {
-            alert('存储桶不存在且无法自动创建，请先在 Supabase SQL Editor 中执行 supabase-schema.sql')
-            setUploading(false)
-            return
-          }
-        }
-
         const path = `${Date.now()}_${theFile.name}`
         const { error: uploadErr } = await supabase.storage
           .from('company-files')
@@ -155,8 +119,6 @@ function CompanyFiles({ supabase }: { supabase: any }) {
           return
         }
 
-        const { data } = supabase.storage.from('company-files').getPublicUrl(path)
-
         // 插入 files 表记录（列名：name, file_path, file_size, file_type）
         const { error: dbErr } = await supabase.from('files').insert({
           name: theFile.name,
@@ -167,7 +129,7 @@ function CompanyFiles({ supabase }: { supabase: any }) {
 
         if (dbErr) {
           console.error('文件记录保存失败:', dbErr.message)
-          alert('文件已上传但记录保存失败：' + dbErr.message + '\n\n请确认 files 表已创建（在 SQL Editor 中执行 supabase-schema.sql）')
+          alert('文件已上传但记录保存失败：' + dbErr.message)
         }
 
         fetchFiles()
