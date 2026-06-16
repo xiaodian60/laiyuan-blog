@@ -1,258 +1,276 @@
-"use client";
+'use client'
 
-import { useState, useEffect } from 'react';
-import { useParams, useRouter } from 'next/navigation';
-import { createClient } from '@supabase/supabase-js';
-import { ChevronLeft, Heart, MessageSquare, Edit, Trash2, X, Reply } from 'lucide-react';
-import Link from 'next/link';
+import { useState, useEffect } from 'react'
+import { createClient } from '@supabase/supabase-js'
 
-const supabase = createClient(
-  'https://scosnulrtmlzbcbacoyt.supabase.co',
-  'sb_publishable_Zx_ftzPLaaufc9nENbMopw_PDIBIa8h'
-);
+/* ═══════════════════════════════════════════════════════
+   Supabase 客户端（硬编码）
+   ═══════════════════════════════════════════════════════ */
+const SUPABASE_URL = 'https://scosnulrtmlzbcbacoyt.supabase.co'
+const SUPABASE_ANON_KEY = 'sb_publishable_Zx_ftzPLaaufc9nENbMopw_PDIBIa8h'
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
 
-export default function PostDetailClient() {
-  const { id } = useParams();
-  const router = useRouter();
-  const [post, setPost] = useState<any>(null);
-  const [comments, setComments] = useState<any[]>([]);
-  const [newComment, setNewComment] = useState("");
-  const [likes, setLikes] = useState(0);
-  const [userLiked, setUserLiked] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [isEditing, setIsEditing] = useState(false);
-  const [editTitle, setEditTitle] = useState("");
-  const [editContent, setEditContent] = useState("");
-  const [editImage, setEditImage] = useState("");
-  const [imgExpanded, setImgExpanded] = useState(false);
-  
-  const [replyTo, setReplyTo] = useState<any>(null);
-  const [replyContent, setReplyContent] = useState("");
+/* ── 类型 ──────────────────────────────────────────── */
+interface Post {
+  id: string
+  title: string
+  content: string
+  tags: string[]
+  image_url: string | null
+  is_pinned: boolean
+  likes_count: number
+  created_at: string
+}
+
+interface Comment {
+  id: string
+  post_id: string
+  author: string
+  content: string
+  parent_id: string | null
+  created_at: string
+}
+
+/* ═══════════════════════════════════════════════════════
+   详情页客户端组件
+   ═══════════════════════════════════════════════════════ */
+export default function PostDetailClient({
+  post,
+  initialComments,
+}: {
+  post: Post
+  initialComments: Comment[]
+}) {
+  /* ── 状态 ──────────────────────────────────────── */
+  const [comments, setComments] = useState<Comment[]>(initialComments)
+  const [newComment, setNewComment] = useState('')
+  const [authorName, setAuthorName] = useState('')
+  const [replyTo, setReplyTo] = useState<string | null>(null)
+  const [replyContent, setReplyContent] = useState('')
+  const [liked, setLiked] = useState(false)
+  const [likesCount, setLikesCount] = useState(post.likes_count)
+  const [isEditing, setIsEditing] = useState(false)
+  const [editTitle, setEditTitle] = useState(post.title)
+  const [editContent, setEditContent] = useState(post.content)
+  const [editTags, setEditTags] = useState((post.tags || []).join(', '))
+  const [saving, setSaving] = useState(false)
+
+  // 图片放大
+  const [imageExpanded, setImageExpanded] = useState(false)
 
   useEffect(() => {
-    if (id) fetchPostData();
-  }, [id]);
+    setLiked(!!localStorage.getItem(`liked_${post.id}`))
+  }, [post.id])
 
-  const fetchPostData = async () => {
-    const { data: postData } = await supabase.from('posts').select('*').eq('id', id).single();
-    const { data: commentData } = await supabase
-      .from('comments')
-      .select('*')
-      .eq('post_id', id)
-      .order('created_at', { ascending: true });
-    const { count } = await supabase.from('likes').select('*', { count: 'exact', head: true }).eq('post_id', id);
-    setPost(postData);
-    setComments((commentData ?? []) as any[]);
-    setLikes(count || 0);
-    if (postData) {
-      setEditTitle(postData.title);
-      setEditContent(postData.content);
-      setEditImage(postData.image_url || "");
-    }
-    setLoading(false);
-  };
-
-  const handleComment = async () => {
-    if (!newComment.trim()) return;
-    await supabase.from('comments').insert([{ post_id: id, content: newComment }]);
-    setNewComment("");
-    await fetchPostData();
-  };
-
-  const handleReply = async () => {
-    if (!replyContent.trim() || !replyTo) return;
-    await supabase.from('comments').insert([
-      { post_id: id, content: replyContent, parent_id: replyTo }
-    ]);
-    setReplyContent("");
-    setReplyTo(null);
-    await fetchPostData();
-  };
-
-  const handleDeleteComment = async (commentId: string) => {
-    if (!confirm("确定要删除这条评论吗？")) return;
-    await supabase.from('comments').delete().eq('id', commentId);
-    await fetchPostData();
-  };
-
+  /* ── 操作 ──────────────────────────────────────── */
   const handleLike = async () => {
-    if (userLiked) {
-      await supabase.from('likes').delete().eq('post_id', id);
-      setLikes(likes - 1);
-      setUserLiked(false);
-    } else {
-      await supabase.from('likes').insert([{ post_id: id }]);
-      setLikes(likes + 1);
-      setUserLiked(true);
-    }
-  };
+    if (liked) return
+    await supabase.from('posts').update({ likes_count: likesCount + 1 }).eq('id', post.id)
+    setLiked(true)
+    setLikesCount((c) => c + 1)
+    localStorage.setItem(`liked_${post.id}`, '1')
+  }
 
-  const handleDeletePost = async () => {
-    if (!confirm("确定要永久删除这篇文章吗？")) return;
-    await supabase.from('posts').delete().eq('id', id);
-    router.push('/');
-  };
+  const refreshComments = async () => {
+    const { data } = await supabase.from('comments').select('*').eq('post_id', post.id).order('created_at', { ascending: true })
+    setComments(data || [])
+  }
 
-  const handleUpdatePost = async () => {
-    await supabase.from('posts').update({ title: editTitle, content: editContent, image_url: editImage }).eq('id', id);
-    setIsEditing(false);
-    fetchPostData();
-  };
+  const addComment = async () => {
+    if (!newComment.trim() || !authorName.trim()) return
+    await supabase.from('comments').insert({ post_id: post.id, author: authorName, content: newComment, parent_id: null })
+    await refreshComments()
+    setNewComment('')
+  }
 
-  const buildCommentTree = (flatComments: any[]) => {
-    const map: any = {};
-    const roots: any[] = [];
-    flatComments.forEach(comment => {
-      map[comment.id] = { ...comment, children: [] };
-    });
-    flatComments.forEach(comment => {
-      if (comment.parent_id) {
-        if (map[comment.parent_id]) {
-          map[comment.parent_id].children.push(map[comment.id]);
-        }
-      } else {
-        roots.push(map[comment.id]);
-      }
-    });
-    return roots;
-  };
+  const addReply = async (parentId: string) => {
+    if (!replyContent.trim() || !authorName.trim()) return
+    await supabase.from('comments').insert({ post_id: post.id, author: authorName, content: replyContent, parent_id: parentId })
+    await refreshComments()
+    setReplyContent('')
+    setReplyTo(null)
+  }
 
-  const CommentItem = ({ comment, level = 0 }: { comment: any; level?: number }) => {
-    return (
-      <div className={`flex flex-col gap-2 ${level > 0 ? 'ml-6 border-l border-white/10 pl-4' : ''}`}>
-        <div className="bg-white/[0.05] p-4 rounded-2xl flex items-start gap-3 border border-white/5">
-          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-400 to-pink-400 flex-shrink-0" />
-          <div className="flex-1">
-            <div className="flex justify-between items-start">
-              <p className="text-gray-300 break-words">{comment.content}</p>
-              <div className="flex gap-2 items-center">
-                <button
-                  onClick={() => setReplyTo(comment.id)}
-                  className="text-gray-500 hover:text-blue-400 transition text-xs flex items-center gap-1"
-                >
-                  <Reply size={14} /> 回复
-                </button>
-                <button
-                  onClick={() => handleDeleteComment(comment.id)}
-                  className="text-gray-500 hover:text-red-400 transition text-xs"
-                >
-                  <X size={16} />
-                </button>
+  const deleteComment = async (id: string) => {
+    if (!confirm('确定删除此评论？')) return
+    await supabase.from('comments').delete().eq('id', id)
+    await refreshComments()
+  }
+
+  const saveEdit = async () => {
+    setSaving(true)
+    await supabase.from('posts').update({
+      title: editTitle,
+      content: editContent,
+      tags: editTags.split(',').map((t) => t.trim()).filter(Boolean),
+    }).eq('id', post.id)
+    setSaving(false)
+    setIsEditing(false)
+    window.location.reload()
+  }
+
+  /* ── 辅助 ──────────────────────────────────────── */
+  const formatDate = (d: string) =>
+    new Date(d).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+
+  const topLevel = comments.filter((c) => !c.parent_id)
+  const getReplies = (parentId: string) => comments.filter((c) => c.parent_id === parentId)
+
+  /* ═══════════════════════════════════════════════════════
+     渲染
+     ═══════════════════════════════════════════════════════ */
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* 顶部栏 */}
+      <header className="bg-white shadow-sm sticky top-0 z-30">
+        <div className="max-w-3xl mx-auto px-4 py-3 flex items-center gap-3">
+          <a href="/" className="text-primary hover:underline text-sm flex items-center gap-1">← 返回首页</a>
+        </div>
+      </header>
+
+      <main className="max-w-3xl mx-auto px-4 py-8 space-y-6">
+        {/* ━━ 文章区域 ━━ */}
+        <article className="bg-white rounded-xl shadow-sm overflow-hidden">
+          {/* 封面图 — 可点击放大 */}
+          {post.image_url && !isEditing && (
+            <div className="relative cursor-pointer group" onClick={() => setImageExpanded(true)}>
+              <img src={post.image_url} alt={post.title} className="w-full max-h-80 object-cover group-hover:opacity-95 transition-opacity" />
+              <div className="absolute bottom-3 right-3 bg-white/80 backdrop-blur-sm px-2 py-1 rounded text-xs text-muted opacity-0 group-hover:opacity-100 transition-opacity">
+                🔍 点击放大
               </div>
             </div>
-            <span className="text-[10px] text-gray-500 mt-1 block">
-              {new Date(comment.created_at).toLocaleString()}
-            </span>
-          </div>
-        </div>
+          )}
 
-        {replyTo === comment.id && (
-          <div className="ml-6 flex gap-2 mb-2">
-            <textarea
-              value={replyContent}
-              onChange={(e) => setReplyContent(e.target.value)}
-              placeholder="写下你的回复..."
-              className="flex-1 bg-white/10 p-2 rounded-lg text-white border border-white/10 focus:outline-none focus:border-white/30 h-16 resize-none text-sm"
-            />
-            <button
-              onClick={handleReply}
-              className="px-3 py-1 bg-blue-500/80 hover:bg-blue-500 rounded-lg text-white transition h-fit text-sm"
-            >
-              发送
-            </button>
-            <button
-              onClick={() => setReplyTo(null)}
-              className="px-2 py-1 bg-white/10 hover:bg-white/20 rounded-lg text-white transition h-fit text-sm"
-            >
-              取消
-            </button>
-          </div>
-        )}
-
-        {comment.children && comment.children.length > 0 && (
-          <div className="flex flex-col gap-2">
-            {comment.children.map((child: any) => (
-              <CommentItem key={child.id} comment={child} level={level + 1} />
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  const commentTree = buildCommentTree(comments);
-
-  if (loading) return <div className="min-h-screen bg-black text-white flex items-center justify-center">加载中...</div>;
-  if (!post) return <div className="min-h-screen bg-black text-white flex items-center justify-center">文章不存在</div>;
-
-  return (
-    <div className="min-h-screen bg-[#0a0a0a] text-white p-6 md:p-12">
-      <Link href="/" className="inline-flex items-center text-gray-400 hover:text-white mb-6 transition"><ChevronLeft size={20} className="mr-1" /> 返回首页</Link>
-      <div className="max-w-3xl mx-auto relative">
-        {isEditing ? (
-          <div className="space-y-4">
-            <input type="text" value={editTitle} onChange={(e) => setEditTitle(e.target.value)} className="w-full bg-white/10 p-3 rounded-lg text-white border border-white/10 focus:outline-none focus:border-white/30 text-3xl font-bold" />
-            <textarea value={editContent} onChange={(e) => setEditContent(e.target.value)} className="w-full bg-white/10 p-3 rounded-lg text-white border border-white/10 focus:outline-none focus:border-white/30 h-60 resize-none" />
-            <input type="text" value={editImage} onChange={(e) => setEditImage(e.target.value)} placeholder="图片链接" className="w-full bg-white/10 p-3 rounded-lg text-white border border-white/10 focus:outline-none focus:border-white/30" />
-            <div className="flex gap-3"><button onClick={handleUpdatePost} className="px-4 py-2 bg-green-500 hover:bg-green-600 rounded-lg transition">保存</button><button onClick={() => setIsEditing(false)} className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-lg transition">取消</button></div>
-          </div>
-        ) : (
-          <>
-            <div className="flex justify-between items-start"><h1 className="text-4xl md:text-5xl font-bold mb-4">{post.title}</h1>
-              <div className="flex gap-2"><button onClick={() => setIsEditing(true)} className="p-2 bg-white/10 hover:bg-white/20 rounded-lg transition"><Edit size={18} /></button>
-              <button onClick={handleDeletePost} className="p-2 bg-red-500/20 hover:bg-red-500/30 rounded-lg transition text-red-400"><Trash2 size={18} /></button></div>
-            </div>
-            <div className="flex gap-4 text-sm text-gray-400 mb-6"><span>{new Date(post.created_at).toLocaleDateString()}</span><span className="flex items-center gap-1"><Heart size={14} /> {likes}</span></div>
-
-            {post.image_url && (
+          <div className="p-6">
+            {isEditing ? (
+              /* ── 编辑模式 ── */
+              <div className="space-y-4">
+                <input value={editTitle} onChange={(e) => setEditTitle(e.target.value)} placeholder="标题" className="w-full text-2xl font-bold px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary" />
+                <textarea value={editContent} onChange={(e) => setEditContent(e.target.value)} rows={12} className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary resize-none text-sm leading-relaxed" />
+                <input value={editTags} onChange={(e) => setEditTags(e.target.value)} placeholder="标签（逗号分隔）" className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm" />
+                <div className="flex gap-3 pt-2">
+                  <button onClick={() => setIsEditing(false)} className="px-5 py-2 border rounded-lg hover:bg-gray-50 transition-colors text-sm">取消</button>
+                  <button onClick={saveEdit} disabled={saving} className="px-5 py-2 bg-primary text-white rounded-lg hover:bg-primary-dark transition-colors disabled:opacity-50 text-sm">{saving ? '保存中...' : '保存修改'}</button>
+                </div>
+              </div>
+            ) : (
+              /* ── 阅读模式 ── */
               <>
-                {imgExpanded && <div className="fixed inset-0 bg-black/70 z-40 transition-opacity duration-300" onClick={() => setImgExpanded(false)} />}
-                <div className={`relative mb-6 transition-all duration-300 ${imgExpanded ? 'fixed inset-0 z-50 flex items-center justify-center' : ''}`}>
-                  <img src={post.image_url} alt="封面" className={`w-full rounded-xl transition-all duration-300 cursor-pointer ${imgExpanded ? 'h-auto max-h-[85vh] object-contain' : 'h-80 object-cover'}`} onClick={() => setImgExpanded(!imgExpanded)} />
-                  <button onClick={() => setImgExpanded(!imgExpanded)} className="absolute bottom-2 right-2 bg-black/60 text-white px-3 py-1 rounded-lg text-sm hover:bg-black/80 transition">{imgExpanded ? '收起图片' : '展开图片'}</button>
+                {/* 标题行 */}
+                <div className="flex items-start gap-2 mb-4">
+                  {post.is_pinned && <span className="shrink-0 px-2 py-0.5 text-xs font-bold bg-amber-400 text-white rounded mt-1">置顶</span>}
+                  <h1 className="text-2xl font-bold flex-1 leading-snug">{post.title}</h1>
+                  <button onClick={() => setIsEditing(true)} className="shrink-0 text-sm text-primary hover:underline mt-1">✏️ 编辑</button>
+                </div>
+
+                {/* 正文 */}
+                <div className="text-gray-700 whitespace-pre-wrap mb-5 leading-relaxed text-sm">{post.content}</div>
+
+                {/* 底部信息 */}
+                <div className="flex items-center justify-between pt-4 border-t flex-wrap gap-3">
+                  <div className="flex gap-2 flex-wrap">
+                    {(post.tags || []).map((tag) => (
+                      <span key={tag} className="px-2.5 py-0.5 text-xs bg-blue-100 text-blue-700 rounded-full">{tag}</span>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <span className="text-xs text-gray-400">{formatDate(post.created_at)}</span>
+                    <button
+                      onClick={handleLike}
+                      className={`flex items-center gap-1 text-sm transition-colors ${liked ? 'text-red-500 cursor-default' : 'text-gray-400 hover:text-red-500'}`}
+                    >
+                      {liked ? '❤️' : '🤍'} {likesCount}
+                    </button>
+                  </div>
                 </div>
               </>
             )}
+          </div>
+        </article>
 
-            <div className="text-lg leading-relaxed text-gray-300 mb-8 whitespace-pre-wrap break-words">
-              {post.content}
-            </div>
+        {/* ━━ 评论区 ━━ */}
+        <section className="bg-white rounded-xl shadow-sm p-6 space-y-5">
+          <h2 className="font-bold text-lg flex items-center gap-2">💬 评论 <span className="text-sm font-normal text-gray-400">({comments.length})</span></h2>
 
-            <div className="flex items-center gap-4 mb-8">
-              <button onClick={handleLike} className={`flex items-center gap-2 px-4 py-2 rounded-full transition ${userLiked ? 'bg-red-500/20 text-red-500' : 'bg-white/10 hover:bg-white/20'}`}><Heart size={20} fill={userLiked ? "currentColor" : "none"} /> {likes} 赞</button>
-            </div>
-          </>
-        )}
-        
-        <div className="border-t border-white/10 pt-6">
-          <h3 className="text-xl font-bold mb-4 flex items-center gap-2"><MessageSquare size={20} /> 评论 ({comments.length})</h3>
-          
-          <div className="flex gap-2 mb-6">
-            <textarea
-              value={newComment}
-              onChange={(e) => setNewComment(e.target.value)}
-              placeholder="写下你的评论..."
-              className="flex-1 bg-white/10 p-3 rounded-lg text-white border border-white/10 focus:outline-none focus:border-white/30 h-20 resize-none"
-            />
-            <button
-              onClick={handleComment}
-              className="px-4 py-2 bg-blue-500/80 hover:bg-blue-500 rounded-lg text-white transition h-fit"
-            >
-              发送
-            </button>
+          {/* 昵称 */}
+          <input value={authorName} onChange={(e) => setAuthorName(e.target.value)} placeholder="你的昵称" className="w-full max-w-xs px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm" />
+
+          {/* 新评论 */}
+          <div className="flex gap-2">
+            <input value={newComment} onChange={(e) => setNewComment(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addComment()} placeholder="发表评论..." className="flex-1 px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm" />
+            <button onClick={addComment} disabled={!newComment.trim() || !authorName.trim()} className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-dark transition-colors disabled:opacity-50 text-sm shrink-0">发送</button>
           </div>
 
-          <div className="space-y-4">
-            {commentTree.length === 0 ? (
-              <p className="text-gray-500 text-sm text-center">还没有评论，写下第一条吧 ✍️</p>
-            ) : (
-              commentTree.map((comment) => (
-                <CommentItem key={comment.id} comment={comment} />
-              ))
-            )}
-          </div>
+          {/* 评论列表 */}
+          {topLevel.length === 0 ? (
+            <p className="text-sm text-gray-400 text-center py-4">暂无评论，来抢沙发吧 🛋️</p>
+          ) : (
+            <div className="space-y-4 divide-y">
+              {topLevel.map((comment) => (
+                <div key={comment.id} className="space-y-3 pt-4 first:pt-0">
+                  {/* 一级评论 */}
+                  <div className="bg-gray-50 rounded-lg p-3">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-sm font-semibold text-primary">{comment.author}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-gray-400">{formatDate(comment.created_at)}</span>
+                        <button onClick={() => setReplyTo(replyTo === comment.id ? null : comment.id)} className="text-xs text-primary hover:underline">回复</button>
+                        <button onClick={() => deleteComment(comment.id)} className="text-xs text-red-400 hover:underline">删除</button>
+                      </div>
+                    </div>
+                    <p className="text-sm text-gray-700 leading-relaxed">{comment.content}</p>
+                  </div>
+
+                  {/* 回复输入框 */}
+                  {replyTo === comment.id && (
+                    <div className="ml-6 flex gap-2">
+                      <input value={replyContent} onChange={(e) => setReplyContent(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addReply(comment.id)} placeholder={`回复 ${comment.author}...`} className="flex-1 px-3 py-1.5 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm" autoFocus />
+                      <button onClick={() => addReply(comment.id)} disabled={!replyContent.trim()} className="px-3 py-1.5 bg-primary text-white rounded-lg hover:bg-primary-dark transition-colors disabled:opacity-50 text-xs shrink-0">回复</button>
+                    </div>
+                  )}
+
+                  {/* 嵌套回复 */}
+                  {getReplies(comment.id).map((reply) => (
+                    <div key={reply.id} className="ml-6 bg-blue-50 rounded-lg p-3">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-sm font-semibold text-primary">{reply.author}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-gray-400">{formatDate(reply.created_at)}</span>
+                          <button onClick={() => deleteComment(reply.id)} className="text-xs text-red-400 hover:underline">删除</button>
+                        </div>
+                      </div>
+                      <p className="text-sm text-gray-700 leading-relaxed">{reply.content}</p>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      </main>
+
+      {/* ━━━ 图片放大浮层 ━━━ */}
+      {imageExpanded && post.image_url && (
+        <div
+          className="fixed inset-0 z-50 flex flex-col items-center justify-center p-4"
+          style={{ backgroundColor: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' }}
+          onClick={() => setImageExpanded(false)}
+        >
+          <img
+            src={post.image_url}
+            alt={post.title}
+            className="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          />
+          <button
+            onClick={() => setImageExpanded(false)}
+            className="mt-4 px-6 py-2 bg-white text-gray-700 rounded-full shadow-lg hover:bg-gray-100 transition-colors text-sm font-medium"
+            onClickCapture={(e) => e.stopPropagation()}
+          >
+            收起图片 ✕
+          </button>
         </div>
-      </div>
+      )}
     </div>
-  );
+  )
 }
