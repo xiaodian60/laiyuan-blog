@@ -36,17 +36,53 @@ interface NeteaseSong {
   artists: { name: string }[]
 }
 
+/* ── 确保存储桶存在（如果桶不存在则尝试创建）── */
+async function ensureBucket(name: string): Promise<boolean> {
+  try {
+    const { data: buckets } = await supabase.storage.listBuckets()
+    if (buckets?.some((b: any) => b.id === name)) return true
+    // 桶不存在，尝试创建
+    const { error } = await supabase.storage.createBucket(name, { public: true })
+    if (error) {
+      console.warn(`存储桶 ${name} 不存在且无法自动创建:`, error.message)
+      return false
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
 /* ── 图片上传（失败时 console.error 并返回 null）── */
 async function uploadImage(file: File): Promise<string | null> {
-  const ext = file.name.split('.').pop()
-  const path = `${Date.now()}.${ext}`
-  const { error } = await supabase.storage.from('post-images').upload(path, file)
-  if (error) {
-    console.error('图片上传失败:', error.message)
+  try {
+    // 确保桶存在
+    const bucketOk = await ensureBucket('post-images')
+    if (!bucketOk) {
+      console.error('图片上传失败: post-images 存储桶不存在，请先在 Supabase SQL Editor 中执行 supabase-schema.sql')
+      return null
+    }
+
+    const ext = file.name.split('.').pop() || 'png'
+    const path = `${Date.now()}.${ext}`
+    const { error } = await supabase.storage
+      .from('post-images')
+      .upload(path, file, {
+        contentType: file.type || `image/${ext}`,
+        upsert: true,
+      })
+
+    if (error) {
+      console.error('图片上传失败:', error.message)
+      return null
+    }
+
+    const { data } = supabase.storage.from('post-images').getPublicUrl(path)
+    return data.publicUrl
+  } catch (err) {
+    console.error('图片上传异常:', err)
     return null
   }
-  const { data } = supabase.storage.from('post-images').getPublicUrl(path)
-  return data.publicUrl
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -91,18 +127,50 @@ function CompanyFiles({ supabase }: { supabase: any }) {
     requirePwd(async () => {
       setUploading(true)
       try {
+        // 确保 company-files 桶存在
+        const { data: buckets } = await supabase.storage.listBuckets()
+        const bucketExists = buckets?.some((b: any) => b.id === 'company-files')
+        if (!bucketExists) {
+          const { error: createErr } = await supabase.storage.createBucket('company-files', { public: true })
+          if (createErr) {
+            alert('存储桶不存在且无法自动创建，请先在 Supabase SQL Editor 中执行 supabase-schema.sql')
+            setUploading(false)
+            return
+          }
+        }
+
         const path = `${Date.now()}_${theFile.name}`
-        const { error: uploadErr } = await supabase.storage.from('company-files').upload(path, theFile)
+        const { error: uploadErr } = await supabase.storage
+          .from('company-files')
+          .upload(path, theFile, {
+            contentType: theFile.type || 'application/octet-stream',
+            upsert: true,
+          })
+
         if (uploadErr) {
           console.error('文件上传失败:', uploadErr.message)
           alert('文件上传失败：' + uploadErr.message)
           setUploading(false)
           return
         }
+
         const { data } = supabase.storage.from('company-files').getPublicUrl(path)
-        await supabase.from('files').insert({ name: theFile.name, url: data.publicUrl, size: theFile.size })
+
+        // 插入 files 表记录
+        const { error: dbErr } = await supabase.from('files').insert({
+          name: theFile.name,
+          url: data.publicUrl,
+          size: theFile.size,
+        })
+
+        if (dbErr) {
+          console.error('文件记录保存失败:', dbErr.message)
+          alert('文件已上传但记录保存失败：' + dbErr.message + '\n\n请确认 files 表已创建（在 SQL Editor 中执行 supabase-schema.sql）')
+        }
+
         fetchFiles()
       } catch (err) {
+        console.error('文件上传异常:', err)
         alert('文件上传失败，请检查网络连接')
       }
       setUploading(false)
@@ -254,7 +322,7 @@ export default function HomePage() {
     if (pubImage) {
       imageUrl = await uploadImage(pubImage)
       if (imageUrl === null) {
-        alert('上传图片失败：权限不足或网络异常，请检查 Supabase 存储桶配置')
+        alert('上传图片失败！请先在 Supabase SQL Editor 中执行 supabase-schema.sql 创建存储桶。\n\n详细步骤：\n1. 打开 Supabase Dashboard → SQL Editor\n2. 复制粘贴 supabase-schema.sql 的全部内容\n3. 点击 Run 执行')
         setUploading(false)
         return
       }
