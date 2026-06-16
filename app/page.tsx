@@ -36,7 +36,7 @@ interface NeteaseSong {
   artists: { name: string }[]
 }
 
-/* ── 图片上传 ──────────────────────────────────────── */
+/* ── 图片上传（失败时 console.error 并返回 null）── */
 async function uploadImage(file: File): Promise<string | null> {
   const ext = file.name.split('.').pop()
   const path = `${Date.now()}.${ext}`
@@ -49,12 +49,15 @@ async function uploadImage(file: File): Promise<string | null> {
   return data.publicUrl
 }
 
-/* ── 公司文件组件 ──────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════
+   公司文件组件（接收 supabase 参数）
+   ═══════════════════════════════════════════════════════ */
 function CompanyFiles({ supabase }: { supabase: any }) {
   const [files, setFiles] = useState<CompanyFile[]>([])
   const [pwdInput, setPwdInput] = useState('')
   const [showPwdModal, setShowPwdModal] = useState(false)
   const [pendingAction, setPendingAction] = useState<(() => void) | null>(null)
+  const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const fetchFiles = useCallback(async () => {
@@ -86,11 +89,23 @@ function CompanyFiles({ supabase }: { supabase: any }) {
     if (!file) return
     const theFile = file
     requirePwd(async () => {
-      const path = `${Date.now()}_${theFile.name}`
-      await supabase.storage.from('company-files').upload(path, theFile)
-      const { data } = supabase.storage.from('company-files').getPublicUrl(path)
-      await supabase.from('files').insert({ name: theFile.name, url: data.publicUrl, size: theFile.size })
-      fetchFiles()
+      setUploading(true)
+      try {
+        const path = `${Date.now()}_${theFile.name}`
+        const { error: uploadErr } = await supabase.storage.from('company-files').upload(path, theFile)
+        if (uploadErr) {
+          console.error('文件上传失败:', uploadErr.message)
+          alert('文件上传失败：' + uploadErr.message)
+          setUploading(false)
+          return
+        }
+        const { data } = supabase.storage.from('company-files').getPublicUrl(path)
+        await supabase.from('files').insert({ name: theFile.name, url: data.publicUrl, size: theFile.size })
+        fetchFiles()
+      } catch (err) {
+        alert('文件上传失败，请检查网络连接')
+      }
+      setUploading(false)
     })
     e.target.value = ''
   }
@@ -106,14 +121,15 @@ function CompanyFiles({ supabase }: { supabase: any }) {
     bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 
   return (
-    <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-4">
+    <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl p-4">
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-sm font-semibold text-white/60 uppercase tracking-wider">📁 公司文件</h3>
         <button
           onClick={() => fileInputRef.current?.click()}
-          className="px-2.5 py-1 text-xs bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+          disabled={uploading}
+          className="px-3 py-1.5 text-xs bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 min-h-[36px]"
         >
-          上传
+          {uploading ? '上传中...' : '上传'}
         </button>
         <input ref={fileInputRef} type="file" className="hidden" onChange={uploadFile} />
       </div>
@@ -121,7 +137,7 @@ function CompanyFiles({ supabase }: { supabase: any }) {
       {files.length === 0 ? (
         <p className="text-xs text-white/30 text-center py-6">暂无文件</p>
       ) : (
-        <div className="space-y-1.5 max-h-64 overflow-y-auto">
+        <div className="space-y-1.5 max-h-64 overflow-y-auto custom-scrollbar">
           {files.map((file) => (
             <div key={file.id} className="flex items-center gap-2 p-2 rounded-lg hover:bg-white/5 group transition-colors">
               <span className="text-sm shrink-0">📄</span>
@@ -130,8 +146,8 @@ function CompanyFiles({ supabase }: { supabase: any }) {
                 <p className="text-xs text-white/30">{formatSize(file.size)}</p>
               </div>
               <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                <button onClick={() => window.open(file.url, '_blank')} className="text-xs text-purple-400 hover:underline">⬇️</button>
-                <button onClick={() => deleteFile(file)} className="text-xs text-red-400 hover:underline">🗑️</button>
+                <button onClick={() => window.open(file.url, '_blank')} className="text-xs text-purple-400 hover:underline min-h-[32px] flex items-center">⬇️</button>
+                <button onClick={() => deleteFile(file)} className="text-xs text-red-400 hover:underline min-h-[32px] flex items-center">🗑️</button>
               </div>
             </div>
           ))}
@@ -150,12 +166,12 @@ function CompanyFiles({ supabase }: { supabase: any }) {
               onChange={(e) => setPwdInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && confirmPwd()}
               placeholder="请输入操作密码"
-              className="w-full px-4 py-2.5 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-white text-sm"
+              className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-white text-sm"
               autoFocus
             />
             <div className="flex gap-3">
-              <button onClick={() => { setShowPwdModal(false); setPwdInput('') }} className="flex-1 py-2.5 border border-white/10 rounded-lg hover:bg-white/5 transition-colors text-sm text-white/70">取消</button>
-              <button onClick={confirmPwd} className="flex-1 py-2.5 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-sm">确认</button>
+              <button onClick={() => { setShowPwdModal(false); setPwdInput('') }} className="flex-1 py-3 border border-white/10 rounded-lg hover:bg-white/5 transition-colors text-sm text-white/70 min-h-[44px]">取消</button>
+              <button onClick={confirmPwd} className="flex-1 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-sm min-h-[44px]">确认</button>
             </div>
           </div>
         </div>
@@ -183,10 +199,12 @@ export default function HomePage() {
   const [pubImagePreview, setPubImagePreview] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
 
-  // 音乐搜索
+  // 音乐搜索（修复：加 hasSearched + searchError）
   const [musicQuery, setMusicQuery] = useState('')
   const [musicResults, setMusicResults] = useState<NeteaseSong[]>([])
   const [musicSearching, setMusicSearching] = useState(false)
+  const [hasSearched, setHasSearched] = useState(false)
+  const [searchError, setSearchError] = useState<string | null>(null)
   const [selectedMusicId, setSelectedMusicId] = useState<number | null>(null)
   const [selectedMusicName, setSelectedMusicName] = useState('')
 
@@ -236,7 +254,7 @@ export default function HomePage() {
     if (pubImage) {
       imageUrl = await uploadImage(pubImage)
       if (imageUrl === null) {
-        alert('图片上传失败，请检查 Supabase 权限')
+        alert('上传图片失败：权限不足或网络异常，请检查 Supabase 存储桶配置')
         setUploading(false)
         return
       }
@@ -270,14 +288,17 @@ export default function HomePage() {
     reader.readAsDataURL(file)
   }
 
-  /* ── 音乐搜索（网易云） ─────────────────────── */
+  /* ── 音乐搜索（修复：加载状态、无结果提示、错误 alert）── */
   const searchMusic = async () => {
     if (!musicQuery.trim()) return
     setMusicSearching(true)
+    setHasSearched(true)
+    setSearchError(null)
     try {
       const res = await fetch(
         `https://binaryify-netease-cloud-music-api.vercel.app/search?keywords=${encodeURIComponent(musicQuery)}`
       )
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
       const songs: NeteaseSong[] = (data.result?.songs || []).map((s: any) => ({
         id: s.id,
@@ -285,8 +306,12 @@ export default function HomePage() {
         artists: s.artists || s.ar || [],
       }))
       setMusicResults(songs)
-    } catch {
+    } catch (err) {
+      console.error('音乐搜索失败:', err)
       setMusicResults([])
+      const msg = err instanceof Error ? err.message : '未知错误'
+      setSearchError(msg)
+      alert('音乐搜索失败：' + msg + '，请检查网络连接后重试')
     }
     setMusicSearching(false)
   }
@@ -321,243 +346,261 @@ export default function HomePage() {
     <div className="min-h-full flex flex-col bg-[#0a0a0a] text-white">
 
       {/* ═══════════ Hero 区域 ═══════════ */}
-      <section className="relative min-h-screen flex flex-col items-center justify-center overflow-hidden">
+      <section className="relative min-h-screen flex flex-col items-center justify-center overflow-hidden bg-black">
         {/* 紫色光晕 */}
         <div className="absolute top-[-10%] left-1/2 -translate-x-1/2 w-[600px] h-[600px] bg-gradient-to-b from-purple-500/20 to-transparent rounded-full blur-[100px] pointer-events-none" />
         <div className="absolute bottom-[-10%] right-[-10%] w-[500px] h-[500px] bg-purple-600/10 rounded-full blur-[80px] pointer-events-none" />
 
         {/* 太阳系轨道 */}
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          {/* 外圈 */}
           <div className="absolute w-[500px] h-[500px] border border-white/5 rounded-full animate-[spin_40s_linear_infinite]" />
-          {/* 中圈 */}
           <div className="absolute w-[350px] h-[350px] border border-white/8 rounded-full animate-[spin_25s_linear_infinite]" />
-          {/* 内圈 */}
           <div className="absolute w-[200px] h-[200px] border border-white/5 rounded-full animate-[spin_35s_linear_infinite_reverse]" />
-          {/* 中心亮点 */}
-          <div className="absolute w-3 h-3 bg-white rounded-full blur-[2px]" />
+          <div className="absolute w-4 h-4 bg-white/60 rounded-full blur-[2px]" />
         </div>
 
         {/* 标题 */}
-        <h1 className="relative z-10 text-6xl md:text-8xl font-black tracking-tight text-white">
+        <h1 className="relative z-10 text-5xl md:text-6xl lg:text-8xl font-black tracking-tight text-white">
           莱源公司
         </h1>
         <p className="relative z-10 mt-4 text-white/40 text-lg">创新 · 协作 · 未来</p>
 
         {/* 向下箭头 */}
-        <div className="absolute bottom-10 z-10 animate-bounce text-white/30">
+        <a href="#content-section" className="absolute bottom-10 z-10 animate-bounce text-white/30">
           <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
-        </div>
+        </a>
       </section>
 
       {/* ═══════════ 三栏布局 ═══════════ */}
-      <section className="max-w-7xl mx-auto px-4 py-12 w-full">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+      <section id="content-section" className="min-h-screen bg-[#0a0a0a] text-white relative pt-20">
+        <div className="max-w-7xl mx-auto px-4 py-12 w-full">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
 
-          {/* ═══ 左侧栏（1号区域）：事件分类 + 莱源电台 ═══ */}
-          <div className="lg:col-span-3 space-y-6">
-            {/* 事件分类 */}
-            <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-4">
-              <h3 className="text-sm font-semibold text-white/60 uppercase tracking-wider mb-3">🏷️ 事件分类</h3>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  onClick={() => setSelectedTag(null)}
-                  className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${selectedTag === null ? 'bg-purple-600 text-white' : 'bg-white/5 text-white/50 hover:bg-white/10'}`}
-                >
-                  全部
-                </button>
-                {allTags.map((tag) => (
+            {/* ═══ 左侧栏（1号区域）：事件分类 + 莱源电台 ═══ */}
+            <div className="lg:col-span-3 space-y-6 lg:sticky lg:top-20 lg:h-screen lg:overflow-y-auto">
+              {/* 事件分类 */}
+              <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl p-6">
+                <h3 className="text-sm font-semibold text-white/60 uppercase tracking-wider mb-3">🏷️ 事件分类</h3>
+                <div className="flex flex-wrap gap-2">
                   <button
-                    key={tag}
-                    onClick={() => setSelectedTag(tag)}
-                    className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${selectedTag === tag ? 'bg-purple-600 text-white' : 'bg-white/5 text-white/50 hover:bg-white/10'}`}
+                    onClick={() => setSelectedTag(null)}
+                    className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors min-h-[32px] ${
+                      selectedTag === null ? 'bg-purple-600 text-white' : 'bg-white/5 text-white/50 hover:bg-white/10'
+                    }`}
                   >
-                    {tag}
+                    全部
                   </button>
-                ))}
-              </div>
-            </div>
-
-            {/* 莱源电台 */}
-            <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-4">
-              <h3 className="text-sm font-semibold text-white/60 uppercase tracking-wider mb-3">📻 莱源电台</h3>
-              <div className="flex gap-2 mb-3">
-                <input
-                  value={musicQuery}
-                  onChange={(e) => setMusicQuery(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && searchMusic()}
-                  placeholder="搜索歌曲或歌手..."
-                  className="flex-1 min-w-0 px-3 py-1.5 text-sm bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-white placeholder-white/30"
-                />
-                <button
-                  onClick={searchMusic}
-                  disabled={musicSearching}
-                  className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 shrink-0"
-                >
-                  {musicSearching ? '...' : '搜索'}
-                </button>
-              </div>
-
-              {/* 搜索结果 — 双击播放 */}
-              {musicResults.length > 0 && (
-                <div className="space-y-1 max-h-52 overflow-y-auto mb-3">
-                  {musicResults.map((song) => (
-                    <div
-                      key={song.id}
-                      onDoubleClick={() => selectSong(song)}
-                      className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors select-none ${
-                        selectedMusicId === song.id ? 'bg-purple-600/20 ring-1 ring-purple-500/30' : 'hover:bg-white/5'
+                  {allTags.map((tag) => (
+                    <button
+                      key={tag}
+                      onClick={() => setSelectedTag(tag)}
+                      className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors min-h-[32px] ${
+                        selectedTag === tag ? 'bg-purple-600 text-white' : 'bg-white/5 text-white/50 hover:bg-white/10'
                       }`}
-                      title="双击播放"
                     >
-                      <span className="text-sm shrink-0">🎵</span>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-medium text-white/80 truncate">{song.name}</p>
-                        <p className="text-xs text-white/30 truncate">{song.artists.map((a) => a.name).join('/')}</p>
-                      </div>
-                    </div>
+                      {tag}
+                    </button>
                   ))}
-                  <p className="text-xs text-white/20 text-center pt-1">💡 双击歌名播放</p>
                 </div>
-              )}
+              </div>
 
-              {/* 网易云外链播放器 */}
-              {selectedMusicId && (
-                <div className="mt-3">
-                  <p className="text-xs text-white/40 mb-2 truncate">🎶 {selectedMusicName}</p>
-                  <iframe
-                    key={selectedMusicId}
-                    src={`//music.163.com/outchain/player?type=2&id=${selectedMusicId}&auto=1&height=66`}
-                    className="w-full rounded-lg border-0"
-                    style={{ height: 86 }}
-                    allow="autoplay"
+              {/* 莱源电台（修复：搜索按钮显式文字、加载状态、无结果提示、错误 alert） */}
+              <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl p-6">
+                <h3 className="text-sm font-semibold text-white/60 uppercase tracking-wider mb-3">📻 莱源电台</h3>
+                <div className="flex gap-2 mb-3">
+                  <input
+                    value={musicQuery}
+                    onChange={(e) => setMusicQuery(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && searchMusic()}
+                    placeholder="搜索歌曲或歌手..."
+                    className="flex-1 min-w-0 px-3 py-2 text-sm bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-white placeholder-white/30"
                   />
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* ═══ 中间栏（2号区域）：莱源动态 + 卡片流 ═══ */}
-          <div className="lg:col-span-6">
-            <h2 className="text-2xl font-bold text-white sticky top-20 z-20 bg-[#0a0a0a]/80 backdrop-blur-sm py-3 mb-4">
-              📰 莱源动态
-            </h2>
-
-            <div className="space-y-4">
-              {filteredPosts.length === 0 ? (
-                <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-12 text-center">
-                  <p className="text-4xl mb-3">📭</p>
-                  <p className="text-white/30">暂无动态，点击右下角 + 发布</p>
-                </div>
-              ) : (
-                filteredPosts.map((post) => (
-                  <article
-                    key={post.id}
-                    className="group relative bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl overflow-hidden transition-all hover:shadow-[0_0_40px_rgba(168,85,247,0.15)] hover:bg-gradient-to-b hover:from-purple-500/10 hover:to-transparent"
+                  <button
+                    onClick={searchMusic}
+                    disabled={musicSearching}
+                    className="px-4 py-2 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 shrink-0 min-h-[40px]"
                   >
-                    {/* 头图 */}
-                    {post.image_url && (
-                      <a href={`/posts/${post.id}`}>
-                        <img src={post.image_url} alt={post.title} className="w-full h-48 object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
-                      </a>
-                    )}
+                    {musicSearching ? '搜索中...' : '搜索'}
+                  </button>
+                </div>
 
-                    <div className="p-5">
-                      {/* 标题 */}
-                      <h3 className="text-lg font-bold text-white mb-2 leading-snug">
-                        <a href={`/posts/${post.id}`} className="hover:text-purple-400 transition-colors">{post.title}</a>
-                      </h3>
+                {/* 加载状态 */}
+                {musicSearching && (
+                  <p className="text-xs text-purple-400 text-center py-3 animate-pulse">正在搜索...</p>
+                )}
 
-                      {/* 置顶按钮 + 标签（同行） */}
-                      <div className="flex items-center gap-2 flex-wrap mb-3">
-                        <button
-                          onClick={() => togglePin(post)}
-                          className={`shrink-0 px-2 py-0.5 text-xs font-bold rounded transition-colors ${
-                            post.is_pinned ? 'bg-amber-500 text-white' : 'bg-white/5 text-white/30 hover:bg-white/10'
-                          }`}
-                          title={post.is_pinned ? '取消置顶' : '置顶'}
-                        >
-                          {post.is_pinned ? '📌 置顶' : '📍 置顶'}
-                        </button>
-                        {(post.tags || []).map((tag) => (
-                          <span
-                            key={tag}
-                            onClick={() => setSelectedTag(tag)}
-                            className="cursor-pointer px-2 py-0.5 text-xs bg-purple-500/20 text-purple-300 rounded-full hover:bg-purple-500/30 transition-colors"
-                          >
-                            {tag}
-                          </span>
-                        ))}
-                        {/* 日期靠右 */}
-                        <span className="ml-auto text-xs text-white/20 shrink-0">{formatDate(post.created_at)}</span>
+                {/* 错误提示 */}
+                {searchError && !musicSearching && (
+                  <p className="text-xs text-red-400 text-center py-2">搜索失败，请检查网络连接后重试。</p>
+                )}
+
+                {/* 无结果提示 */}
+                {hasSearched && !musicSearching && !searchError && musicResults.length === 0 && (
+                  <p className="text-xs text-white/30 text-center py-3">未找到相关歌曲，请换个关键词。</p>
+                )}
+
+                {/* 搜索结果 — 双击播放 */}
+                {musicResults.length > 0 && (
+                  <div className="mt-3 space-y-1 max-h-48 overflow-y-auto custom-scrollbar border-t border-white/10 pt-2">
+                    {musicResults.map((song) => (
+                      <div
+                        key={song.id}
+                        onDoubleClick={() => selectSong(song)}
+                        className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors select-none ${
+                          selectedMusicId === song.id ? 'bg-purple-600/20 ring-1 ring-purple-500/30' : 'hover:bg-white/5'
+                        }`}
+                        title="双击播放"
+                      >
+                        <span className="text-sm shrink-0">🎵</span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium text-white/80 truncate">{song.name}</p>
+                          <p className="text-xs text-white/30 truncate">{song.artists.map((a) => a.name).join('/')}</p>
+                        </div>
                       </div>
+                    ))}
+                    <p className="text-xs text-white/20 text-center pt-1">💡 双击歌名播放</p>
+                  </div>
+                )}
 
-                      {/* 内容（折叠/展开） */}
-                      <div className={`text-sm text-white/60 leading-relaxed mb-3 ${collapsed[post.id] ? '' : 'line-clamp-3'}`}>
-                        {post.content}
-                      </div>
-                      {post.content.length > 100 && (
-                        <button
-                          onClick={() => toggleCollapse(post.id)}
-                          className="text-xs text-purple-400 hover:text-purple-300 mb-3 inline-block transition-colors"
-                        >
-                          {collapsed[post.id] ? '收起 ▲' : '展开阅读 ▼'}
-                        </button>
+                {/* 网易云外链播放器 */}
+                {selectedMusicId && (
+                  <div className="mt-3">
+                    <p className="text-xs text-white/40 mb-2 truncate">🎶 {selectedMusicName}</p>
+                    <iframe
+                      key={selectedMusicId}
+                      src={`//music.163.com/outchain/player?type=2&id=${selectedMusicId}&auto=1&height=66`}
+                      className="w-full rounded-lg border-0"
+                      style={{ height: 86 }}
+                      allow="autoplay"
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* ═══ 中间栏（2号区域）：莱源动态 + 卡片流 ═══ */}
+            <main className="lg:col-span-6">
+              <h2 className="text-2xl font-bold text-white sticky top-0 z-20 bg-[#0a0a0a]/90 backdrop-blur-sm py-4 mb-4">
+                📰 莱源动态
+              </h2>
+
+              <div className="space-y-4">
+                {filteredPosts.length === 0 ? (
+                  <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl p-12 text-center">
+                    <p className="text-4xl mb-3">📭</p>
+                    <p className="text-white/30">暂无动态，点击右下角 + 发布</p>
+                  </div>
+                ) : (
+                  filteredPosts.map((post) => (
+                    <article
+                      key={post.id}
+                      className="group relative bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl overflow-hidden transition-all hover:shadow-[0_0_40px_rgba(168,85,247,0.15)] hover:bg-gradient-to-b hover:from-purple-500/10 hover:to-transparent"
+                    >
+                      {/* 头图 */}
+                      {post.image_url && (
+                        <a href={`/posts/${post.id}`}>
+                          <img src={post.image_url} alt={post.title} className="w-full h-48 object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
+                        </a>
                       )}
 
-                      {/* 底部操作栏 */}
-                      <div className="flex items-center justify-between pt-3 border-t border-white/5">
-                        <div className="flex items-center gap-4">
-                          <button
-                            onClick={() => likePost(post)}
-                            className={`flex items-center gap-1 text-sm transition-colors ${isLiked(post.id) ? 'text-red-400' : 'text-white/30 hover:text-red-400'}`}
-                          >
-                            {isLiked(post.id) ? '❤️' : '🤍'} {post.likes_count}
-                          </button>
-                          <a href={`/posts/${post.id}`} className="text-sm text-white/30 hover:text-purple-400 transition-colors">💬 评论</a>
-                        </div>
-                        {/* 右上角删除 */}
-                        <button
-                          onClick={() => deletePost(post.id)}
-                          className="text-xs text-white/20 hover:text-red-400 transition-colors"
-                        >
-                          🗑️ 删除
-                        </button>
-                      </div>
-                    </div>
-                  </article>
-                ))
-              )}
-            </div>
-          </div>
+                      <div className="p-5">
+                        {/* 标题 */}
+                        <h3 className="text-lg font-bold text-white mb-2 leading-snug">
+                          <a href={`/posts/${post.id}`} className="hover:text-purple-400 transition-colors">{post.title}</a>
+                        </h3>
 
-          {/* ═══ 右侧栏（3号区域）：公司档案 + 公司文件 ═══ */}
-          <div className="lg:col-span-3 space-y-6">
-            {/* 公司档案 */}
-            <div className="bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-4">
-              <h3 className="text-sm font-semibold text-white/60 uppercase tracking-wider mb-4">📊 公司档案</h3>
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-white/40">发布动态</span>
-                  <span className="text-lg font-bold text-purple-400">{posts.length}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-white/40">总点赞数</span>
-                  <span className="text-lg font-bold text-purple-400">{posts.reduce((s, p) => s + p.likes_count, 0)}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-white/40">标签数</span>
-                  <span className="text-lg font-bold text-purple-400">{allTags.length}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-white/40">置顶数</span>
-                  <span className="text-lg font-bold text-purple-400">{posts.filter((p) => p.is_pinned).length}</span>
+                        {/* 置顶按钮 + 标签（同行） */}
+                        <div className="flex items-center gap-2 flex-wrap mb-3">
+                          <button
+                            onClick={() => togglePin(post)}
+                            className={`shrink-0 px-2 py-1 text-xs font-bold rounded transition-colors min-h-[28px] ${
+                              post.is_pinned ? 'bg-amber-500 text-white' : 'bg-white/5 text-white/30 hover:bg-white/10'
+                            }`}
+                            title={post.is_pinned ? '取消置顶' : '置顶'}
+                          >
+                            {post.is_pinned ? '📌 置顶' : '📍 置顶'}
+                          </button>
+                          {(post.tags || []).map((tag) => (
+                            <span
+                              key={tag}
+                              onClick={() => setSelectedTag(tag)}
+                              className="cursor-pointer px-2 py-0.5 text-xs bg-purple-500/20 text-purple-300 rounded-full hover:bg-purple-500/30 transition-colors"
+                            >
+                              {tag}
+                            </span>
+                          ))}
+                          {/* 日期靠右 */}
+                          <span className="ml-auto text-xs text-white/20 shrink-0">{formatDate(post.created_at)}</span>
+                        </div>
+
+                        {/* 内容（折叠/展开） */}
+                        <div className={`text-sm text-white/60 leading-relaxed mb-3 ${collapsed[post.id] ? '' : 'line-clamp-3'}`}>
+                          {post.content}
+                        </div>
+                        {post.content.length > 100 && (
+                          <button
+                            onClick={() => toggleCollapse(post.id)}
+                            className="text-xs text-purple-400 hover:text-purple-300 mb-3 inline-block transition-colors min-h-[28px]"
+                          >
+                            {collapsed[post.id] ? '收起 ▲' : '展开阅读 ▼'}
+                          </button>
+                        )}
+
+                        {/* 底部操作栏 */}
+                        <div className="flex items-center justify-between pt-3 border-t border-white/5">
+                          <div className="flex items-center gap-4">
+                            <button
+                              onClick={() => likePost(post)}
+                              className={`flex items-center gap-1 text-sm transition-colors min-h-[32px] ${
+                                isLiked(post.id) ? 'text-red-400 cursor-default' : 'text-white/30 hover:text-red-400'
+                              }`}
+                            >
+                              {isLiked(post.id) ? '❤️' : '🤍'} {post.likes_count}
+                            </button>
+                            <a href={`/posts/${post.id}`} className="text-sm text-white/30 hover:text-purple-400 transition-colors min-h-[32px] flex items-center">💬 评论</a>
+                          </div>
+                          <button
+                            onClick={() => deletePost(post.id)}
+                            className="text-xs text-white/20 hover:text-red-400 transition-colors min-h-[32px]"
+                          >
+                            🗑️ 删除
+                          </button>
+                        </div>
+                      </div>
+                    </article>
+                  ))
+                )}
+              </div>
+            </main>
+
+            {/* ═══ 右侧栏（3号区域）：公司档案 + 公司文件 ═══ */}
+            <div className="lg:col-span-3 space-y-6 lg:sticky lg:top-20 lg:h-screen lg:overflow-y-auto">
+              {/* 公司档案 */}
+              <div className="bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl p-6">
+                <h3 className="text-sm font-semibold text-white/60 uppercase tracking-wider mb-4">📊 公司档案</h3>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-white/40">发布动态</span>
+                    <span className="text-lg font-bold text-purple-400">{posts.length}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-white/40">总点赞数</span>
+                    <span className="text-lg font-bold text-purple-400">{posts.reduce((s, p) => s + p.likes_count, 0)}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-white/40">标签数</span>
+                    <span className="text-lg font-bold text-purple-400">{allTags.length}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-white/40">置顶数</span>
+                    <span className="text-lg font-bold text-purple-400">{posts.filter((p) => p.is_pinned).length}</span>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* 公司文件 */}
-            <CompanyFiles supabase={supabase} />
+              {/* 公司文件 */}
+              <CompanyFiles supabase={supabase} />
+            </div>
           </div>
         </div>
       </section>
@@ -576,29 +619,29 @@ export default function HomePage() {
           <div className="bg-[#1a1a2e] border border-white/10 rounded-2xl w-full max-w-lg p-6 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-bold text-white">发布动态</h3>
-              <button onClick={() => setShowPublish(false)} className="text-white/30 hover:text-white/70 text-xl leading-none">✕</button>
+              <button onClick={() => setShowPublish(false)} className="text-white/30 hover:text-white/70 text-xl leading-none min-h-[44px] min-w-[44px] flex items-center justify-center">✕</button>
             </div>
             <input
               value={pubTitle}
               onChange={(e) => setPubTitle(e.target.value)}
               placeholder="标题"
-              className="w-full px-4 py-2.5 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-white text-sm placeholder-white/30"
+              className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-white text-sm placeholder-white/30"
             />
             <textarea
               value={pubContent}
               onChange={(e) => setPubContent(e.target.value)}
               placeholder="内容..."
               rows={6}
-              className="w-full px-4 py-2.5 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 resize-none text-white text-sm leading-relaxed placeholder-white/30"
+              className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 resize-none text-white text-sm leading-relaxed placeholder-white/30"
             />
             <input
               value={pubTags}
               onChange={(e) => setPubTags(e.target.value)}
               placeholder="标签（逗号分隔，如：技术,生活）"
-              className="w-full px-4 py-2.5 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-white text-sm placeholder-white/30"
+              className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-white text-sm placeholder-white/30"
             />
             <div
-              className="border-2 border-dashed border-white/10 rounded-lg p-4 text-center cursor-pointer hover:border-purple-500/50 transition-colors"
+              className="border-2 border-dashed border-white/10 rounded-lg p-6 text-center cursor-pointer hover:border-purple-500/50 transition-colors min-h-[80px] flex items-center justify-center"
               onClick={() => publishImageRef.current?.click()}
             >
               <input ref={publishImageRef} type="file" accept="image/*" className="hidden" onChange={handleImageSelect} />
@@ -607,7 +650,7 @@ export default function HomePage() {
             <button
               onClick={handlePublish}
               disabled={uploading || !pubTitle.trim() || !pubContent.trim()}
-              className="w-full py-2.5 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 text-sm font-medium"
+              className="w-full py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 text-sm font-medium min-h-[44px]"
             >
               {uploading ? '发布中...' : '发布'}
             </button>
