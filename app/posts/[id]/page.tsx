@@ -1,18 +1,22 @@
-import { createClient } from '@supabase/supabase-js'
-import PostDetailClient from './PostDetailClient'
-
 /* ═══════════════════════════════════════════════════════
-   Supabase 客户端（硬编码）
+   Supabase 配置（硬编码）
    ═══════════════════════════════════════════════════════ */
 const SUPABASE_URL = 'https://scosnulrtmlzbcbacoyt.supabase.co'
 const SUPABASE_ANON_KEY = 'sb_publishable_Zx_ftzPLaaufc9nENbMopw_PDIBIa8h'
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+const headers = {
+  'apikey': SUPABASE_ANON_KEY,
+  'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+}
+
+import PostDetailClient from './PostDetailClient'
 
 /* ── 生成静态路由参数 ─────────────────────────────── */
 export async function generateStaticParams() {
   try {
-    const { data: posts } = await supabase.from('posts').select('id')
-    return (posts || []).map((post) => ({ id: String(post.id) }))
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/posts?select=id`, { headers })
+    const posts = await res.json()
+    return (posts || []).map((post: any) => ({ id: String(post.id) }))
   } catch {
     return []
   }
@@ -28,10 +32,14 @@ export default async function PostPage({
 }) {
   const { id } = await params
 
-  const [{ data: post }, { data: comments }] = await Promise.all([
-    supabase.from('posts').select('*').eq('id', id).single(),
-    supabase.from('comments').select('*').eq('post_id', id).order('created_at', { ascending: true }),
+  const [postRes, commentsRes] = await Promise.all([
+    fetch(`${SUPABASE_URL}/rest/v1/posts?id=eq.${id}&select=*&limit=1`, { headers }),
+    fetch(`${SUPABASE_URL}/rest/v1/comments?post_id=eq.${id}&select=*&order=created_at.asc`, { headers }),
   ])
+
+  const posts = await postRes.json()
+  const comments = await commentsRes.json()
+  const post = posts?.[0] || null
 
   if (!post) {
     return (

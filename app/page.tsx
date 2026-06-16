@@ -1,14 +1,12 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { createClient } from '@supabase/supabase-js'
 
 /* ═══════════════════════════════════════════════════════
    Supabase 客户端（硬编码）
    ═══════════════════════════════════════════════════════ */
 const SUPABASE_URL = 'https://scosnulrtmlzbcbacoyt.supabase.co'
 const SUPABASE_ANON_KEY = 'sb_publishable_Zx_ftzPLaaufc9nENbMopw_PDIBIa8h'
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
 
 /* ── 类型 ──────────────────────────────────────────── */
 interface Post {
@@ -37,35 +35,48 @@ interface NeteaseSong {
   artists: { name: string }[]
 }
 
-/* ── 图片上传（失败时 console.error 并返回 null）── */
-async function uploadImage(file: File): Promise<string | null> {
+/* ── 直接用 REST API 上传文件到 Storage（绕过 SDK 可能的问题）── */
+async function uploadToStorage(bucket: string, path: string, file: File | Blob): Promise<string | null> {
   try {
-    const ext = file.name.split('.').pop() || 'png'
-    const path = `${Date.now()}.${ext}`
-    const { error } = await supabase.storage
-      .from('post-images')
-      .upload(path, file, {
-        contentType: file.type || `image/${ext}`,
-        upsert: true,
-      })
+    const res = await fetch(`${SUPABASE_URL}/storage/v1/object/${bucket}/${path}`, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': file.type || 'application/octet-stream',
+        'x-upsert': 'true',
+      },
+      body: file,
+    })
 
-    if (error) {
-      console.error('图片上传失败:', error.message)
+    if (!res.ok) {
+      const errText = await res.text()
+      console.error(`[Storage] 上传失败 (${res.status}):`, errText)
       return null
     }
 
-    const { data } = supabase.storage.from('post-images').getPublicUrl(path)
-    return data.publicUrl
+    const data = await res.json()
+    console.log('[Storage] 上传成功, key:', data.Key)
+    return data.Key
   } catch (err) {
-    console.error('图片上传异常:', err)
+    console.error('[Storage] 上传异常:', err)
     return null
   }
+}
+
+/* ── 图片上传 ── */
+async function uploadImage(file: File): Promise<string | null> {
+  const ext = file.name.split('.').pop() || 'png'
+  const path = `${Date.now()}.${ext}`
+  const result = await uploadToStorage('post-images', path, file)
+  if (!result) return null
+  return `${SUPABASE_URL}/storage/v1/object/public/post-images/${path}`
 }
 
 /* ═══════════════════════════════════════════════════════
    公司文件组件（接收 supabase 参数）
    ═══════════════════════════════════════════════════════ */
-function CompanyFiles({ supabase }: { supabase: any }) {
+function CompanyFiles() {
   const [files, setFiles] = useState<CompanyFile[]>([])
   const [uploading, setUploading] = useState(false)
   const [showPwdModal, setShowPwdModal] = useState(false)
@@ -75,7 +86,13 @@ function CompanyFiles({ supabase }: { supabase: any }) {
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const fetchFiles = useCallback(async () => {
-    const { data } = await supabase.from('files').select('*').order('created_at', { ascending: false })
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/files?select=*&order=created_at.desc`, {
+      headers: {
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+      },
+    })
+    const data = await res.json()
     setFiles(data || [])
   }, [])
 
@@ -101,7 +118,7 @@ function CompanyFiles({ supabase }: { supabase: any }) {
     setShowPwdModal(false)
     setPwdInput('')
 
-    // 上传文件
+    // 上传文件（直接 REST API）
     if (pendingFile) {
       const theFile = pendingFile
       setPendingFile(null)
@@ -110,32 +127,37 @@ function CompanyFiles({ supabase }: { supabase: any }) {
         const path = `${Date.now()}_${theFile.name}`
         console.log('[CompanyFiles] 开始上传:', theFile.name, '大小:', theFile.size, '类型:', theFile.type)
 
-        const { data: upData, error: uploadErr } = await supabase.storage
-          .from('company-files')
-          .upload(path, theFile, {
-            contentType: theFile.type || 'application/octet-stream',
-            upsert: true,
-          })
+        const uploadResult = await uploadToStorage('company-files', path, theFile)
 
-        if (uploadErr) {
-          console.error('[CompanyFiles] 上传失败:', uploadErr.message)
-          alert('文件上传失败：' + uploadErr.message)
+        if (!uploadResult) {
+          alert('文件上传到存储失败，请检查网络连接或联系管理员')
           setUploading(false)
           return
         }
 
-        console.log('[CompanyFiles] 上传成功, path:', upData.path)
+        console.log('[CompanyFiles] 存储上传成功, path:', path)
 
-        const { error: dbErr } = await supabase.from('files').insert({
-          name: theFile.name,
-          file_path: path,
-          file_size: theFile.size,
-          file_type: theFile.type || 'application/octet-stream',
+        // 写入数据库记录（也用 REST API）
+        const dbRes = await fetch(`${SUPABASE_URL}/rest/v1/files`, {
+          method: 'POST',
+          headers: {
+            'apikey': SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=representation',
+          },
+          body: JSON.stringify({
+            name: theFile.name,
+            file_path: path,
+            file_size: theFile.size,
+            file_type: theFile.type || 'application/octet-stream',
+          }),
         })
 
-        if (dbErr) {
-          console.error('[CompanyFiles] 记录保存失败:', dbErr.message)
-          alert('文件已上传但记录保存失败：' + dbErr.message)
+        if (!dbRes.ok) {
+          const errText = await dbRes.text()
+          console.error('[CompanyFiles] 记录保存失败:', errText)
+          alert('文件已上传但记录保存失败：' + errText)
         } else {
           console.log('[CompanyFiles] 记录保存成功')
         }
@@ -149,16 +171,28 @@ function CompanyFiles({ supabase }: { supabase: any }) {
       return
     }
 
-    // 删除文件
+    // 删除文件（直接 REST API）
     if (pendingDeleteId) {
       const fileId = pendingDeleteId
       const file = files.find(f => f.id === fileId)
       setPendingDeleteId(null)
       try {
         if (file?.file_path) {
-          await supabase.storage.from('company-files').remove([file.file_path])
+          await fetch(`${SUPABASE_URL}/storage/v1/object/company-files/${file.file_path}`, {
+            method: 'DELETE',
+            headers: {
+              'apikey': SUPABASE_ANON_KEY,
+              'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            },
+          })
         }
-        await supabase.from('files').delete().eq('id', fileId)
+        await fetch(`${SUPABASE_URL}/rest/v1/files?id=eq.${fileId}`, {
+          method: 'DELETE',
+          headers: {
+            'apikey': SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          },
+        })
         fetchFiles()
       } catch (err) {
         console.error('[CompanyFiles] 删除失败:', err)
@@ -203,8 +237,8 @@ function CompanyFiles({ supabase }: { supabase: any }) {
               </div>
               <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                 <button onClick={() => {
-                  const { data: urlData } = supabase.storage.from('company-files').getPublicUrl(file.file_path)
-                  window.open(urlData.publicUrl, '_blank')
+                  const url = `${SUPABASE_URL}/storage/v1/object/public/company-files/${file.file_path}`
+                  window.open(url, '_blank')
                 }} className="text-xs text-purple-400 hover:underline min-h-[32px] flex items-center">⬇️</button>
                 <button onClick={() => onDeleteClick(file)} className="text-xs text-red-400 hover:underline min-h-[32px] flex items-center">🗑️</button>
               </div>
@@ -269,9 +303,15 @@ export default function HomePage() {
 
   const publishImageRef = useRef<HTMLInputElement>(null)
 
-  /* ── 数据获取 ──────────────────────────────────── */
+  /* ── 数据获取（REST API）────────────────────────── */
   const fetchPosts = useCallback(async () => {
-    const { data } = await supabase.from('posts').select('*').order('is_pinned', { ascending: false }).order('created_at', { ascending: false })
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/posts?select=*&order=is_pinned.desc,created_at.desc`, {
+      headers: {
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+      },
+    })
+    const data = await res.json()
     setPosts(data || [])
   }, [])
 
@@ -285,19 +325,41 @@ export default function HomePage() {
 
   /* ── 操作 ──────────────────────────────────────── */
   const togglePin = async (post: Post) => {
-    await supabase.from('posts').update({ is_pinned: !post.is_pinned }).eq('id', post.id)
+    await fetch(`${SUPABASE_URL}/rest/v1/posts?id=eq.${post.id}`, {
+      method: 'PATCH',
+      headers: {
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ is_pinned: !post.is_pinned }),
+    })
     fetchPosts()
   }
 
   const deletePost = async (id: string) => {
     if (!confirm('确定删除此文章？')) return
-    await supabase.from('posts').delete().eq('id', id)
+    await fetch(`${SUPABASE_URL}/rest/v1/posts?id=eq.${id}`, {
+      method: 'DELETE',
+      headers: {
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+      },
+    })
     fetchPosts()
   }
 
   const likePost = async (post: Post) => {
     if (localStorage.getItem(`liked_${post.id}`)) return
-    await supabase.from('posts').update({ likes_count: post.likes_count + 1 }).eq('id', post.id)
+    await fetch(`${SUPABASE_URL}/rest/v1/posts?id=eq.${post.id}`, {
+      method: 'PATCH',
+      headers: {
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ likes_count: post.likes_count + 1 }),
+    })
     localStorage.setItem(`liked_${post.id}`, '1')
     fetchPosts()
   }
@@ -319,13 +381,21 @@ export default function HomePage() {
       }
     }
 
-    await supabase.from('posts').insert({
-      title: pubTitle,
-      content: pubContent,
-      tags: pubTags.split(',').map((t) => t.trim()).filter(Boolean),
-      image_url: imageUrl,
-      is_pinned: false,
-      likes_count: 0,
+    await fetch(`${SUPABASE_URL}/rest/v1/posts`, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        title: pubTitle,
+        content: pubContent,
+        tags: pubTags.split(',').map((t) => t.trim()).filter(Boolean),
+        image_url: imageUrl,
+        is_pinned: false,
+        likes_count: 0,
+      }),
     })
 
     setShowPublish(false)
@@ -658,7 +728,7 @@ export default function HomePage() {
               </div>
 
               {/* 公司文件 */}
-              <CompanyFiles supabase={supabase} />
+              <CompanyFiles />
             </div>
           </div>
         </div>

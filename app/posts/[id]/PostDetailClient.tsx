@@ -1,14 +1,21 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { createClient } from '@supabase/supabase-js'
 
 /* ═══════════════════════════════════════════════════════
-   Supabase 客户端（硬编码）
+   Supabase 配置（硬编码，直接 REST API）
    ═══════════════════════════════════════════════════════ */
 const SUPABASE_URL = 'https://scosnulrtmlzbcbacoyt.supabase.co'
 const SUPABASE_ANON_KEY = 'sb_publishable_Zx_ftzPLaaufc9nENbMopw_PDIBIa8h'
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+const authHeaders = {
+  'apikey': SUPABASE_ANON_KEY,
+  'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+}
+const jsonHeaders = {
+  ...authHeaders,
+  'Content-Type': 'application/json',
+}
 
 /* ── 类型 ──────────────────────────────────────────── */
 interface Post {
@@ -32,7 +39,7 @@ interface Comment {
 }
 
 /* ═══════════════════════════════════════════════════════
-   详情页客户端组件（暗色主题）
+   详情页客户端组件（暗色主题，REST API）
    ═══════════════════════════════════════════════════════ */
 export default function PostDetailClient({
   post,
@@ -60,30 +67,43 @@ export default function PostDetailClient({
     setLiked(!!localStorage.getItem(`liked_${post.id}`))
   }, [post.id])
 
-  /* ── 操作 ──────────────────────────────────────── */
+  /* ── 操作（全部 REST API）────────────────────────── */
   const handleLike = async () => {
     if (liked) return
-    await supabase.from('posts').update({ likes_count: likesCount + 1 }).eq('id', post.id)
+    await fetch(`${SUPABASE_URL}/rest/v1/posts?id=eq.${post.id}`, {
+      method: 'PATCH',
+      headers: jsonHeaders,
+      body: JSON.stringify({ likes_count: likesCount + 1 }),
+    })
     setLiked(true)
     setLikesCount((c) => c + 1)
     localStorage.setItem(`liked_${post.id}`, '1')
   }
 
   const refreshComments = async () => {
-    const { data } = await supabase.from('comments').select('*').eq('post_id', post.id).order('created_at', { ascending: true })
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/comments?post_id=eq.${post.id}&select=*&order=created_at.asc`, { headers: authHeaders })
+    const data = await res.json()
     setComments(data || [])
   }
 
   const addComment = async () => {
     if (!newComment.trim() || !authorName.trim()) return
-    await supabase.from('comments').insert({ post_id: post.id, author: authorName, content: newComment, parent_id: null })
+    await fetch(`${SUPABASE_URL}/rest/v1/comments`, {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ post_id: post.id, author: authorName, content: newComment, parent_id: null }),
+    })
     await refreshComments()
     setNewComment('')
   }
 
   const addReply = async (parentId: string) => {
     if (!replyContent.trim() || !authorName.trim()) return
-    await supabase.from('comments').insert({ post_id: post.id, author: authorName, content: replyContent, parent_id: parentId })
+    await fetch(`${SUPABASE_URL}/rest/v1/comments`, {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ post_id: post.id, author: authorName, content: replyContent, parent_id: parentId }),
+    })
     await refreshComments()
     setReplyContent('')
     setReplyTo(null)
@@ -91,17 +111,24 @@ export default function PostDetailClient({
 
   const deleteComment = async (id: string) => {
     if (!confirm('确定删除此评论？')) return
-    await supabase.from('comments').delete().eq('id', id)
+    await fetch(`${SUPABASE_URL}/rest/v1/comments?id=eq.${id}`, {
+      method: 'DELETE',
+      headers: authHeaders,
+    })
     await refreshComments()
   }
 
   const saveEdit = async () => {
     setSaving(true)
-    await supabase.from('posts').update({
-      title: editTitle,
-      content: editContent,
-      tags: editTags.split(',').map((t) => t.trim()).filter(Boolean),
-    }).eq('id', post.id)
+    await fetch(`${SUPABASE_URL}/rest/v1/posts?id=eq.${post.id}`, {
+      method: 'PATCH',
+      headers: jsonHeaders,
+      body: JSON.stringify({
+        title: editTitle,
+        content: editContent,
+        tags: editTags.split(',').map((t) => t.trim()).filter(Boolean),
+      }),
+    })
     setSaving(false)
     setIsEditing(false)
     window.location.reload()
